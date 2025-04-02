@@ -46,12 +46,11 @@ def list_available_models() -> list[str]:
         for m in genai.list_models():
             # Check for generateContent support explicitly
             if 'generateContent' in m.supported_generation_methods:
-                 # Prioritize models likely supporting tools (heuristic)
-                 if m.name.startswith('models/gemini-1.5') or m.name.startswith('models/gemini-pro'):
-                     model_list.append(m.name)
-                 # Include others just in case, but maybe list them later?
-                 # elif not m.name.startswith('models/embedding'): # Avoid embedding models
-                 #    model_list.append(m.name) # Keep other content models
+                # Prioritize models likely supporting tools (heuristic)
+                model_list.append(m.name)
+                # Include others just in case, but maybe list them later?
+                # elif not m.name.startswith('models/embedding'): # Avoid embedding models
+                #    model_list.append(m.name) # Keep other content models
             # Simple check based on user example - might need refinement
             # if hasattr(m, 'tool_config') or m.name.startswith('models/gemini-1.5'):
             #      model_list.append(m.name)
@@ -59,7 +58,7 @@ def list_available_models() -> list[str]:
         model_list = sorted(list(set(model_list))) # Unique and sorted
         logger.info(f"Found {len(model_list)} usable models (supporting generateContent, preferring tool support).")
         if not model_list:
-             logger.warning("No models found supporting generateContent. Check API key/permissions.")
+            logger.warning("No models found supporting generateContent. Check API key/permissions.")
     except Exception as e:
         logger.error(f"Error listing models: {e}", exc_info=True)
     return model_list
@@ -87,7 +86,7 @@ def get_model_output_limit(model_name: str) -> int:
             limit = int(model_info.output_token_limit)
             logger.info(f"Output token limit for {model_name}: {limit}")
         except ValueError:
-             logger.warning(f"Could not parse output token limit for {model_name}. Using fallback.")
+            logger.warning(f"Could not parse output token limit for {model_name}. Using fallback.")
     else:
         logger.warning(f"Could not retrieve output token limit for {model_name}. Using fallback.")
     return limit
@@ -130,11 +129,11 @@ def generate_text(
                 tools_list = [grounding_tool_dynamic]
                 logger.info("Grounding tool constructed successfully.")
             except AttributeError as tool_attr_err:
-                 logger.error(f"Failed to construct grounding tool: Likely missing types in 'google.generativeai.types'. Error: {tool_attr_err}", exc_info=True)
-                 return None, f"Error creating grounding tool: {tool_attr_err}. Check library version."
+                logger.error(f"Failed to construct grounding tool: Likely missing types in 'google.generativeai.types'. Error: {tool_attr_err}", exc_info=True)
+                return None, f"Error creating grounding tool: {tool_attr_err}. Check library version."
             except Exception as tool_err:
-                 logger.error(f"Failed to construct grounding tool: {tool_err}", exc_info=True)
-                 return None, f"Error creating grounding tool: {tool_err}"
+                logger.error(f"Failed to construct grounding tool: {tool_err}", exc_info=True)
+                return None, f"Error creating grounding tool: {tool_err}"
         # --- End REFACTORED ---
 
         # Determine API call arguments (shared between chat and generate_content)
@@ -166,45 +165,45 @@ def generate_text(
         rendered_web_content = None # To store the web snippet if available
         if enable_grounding:
             try:
-                 # Check candidates first for citation_metadata (older style?)
-                 if response.candidates and hasattr(response.candidates[0], 'citation_metadata'):
-                     metadata = response.candidates[0].citation_metadata
-                     if metadata and hasattr(metadata, 'citation_sources'):
-                         for source in metadata.citation_sources:
-                             citations_extracted.append( (getattr(source, 'uri', None), getattr(source, 'title', None)) )
-                         logger.info(f"Extracted {len(citations_extracted)} citations via citation_metadata.")
+                # Check candidates first for citation_metadata (older style?)
+                if response.candidates and hasattr(response.candidates[0], 'citation_metadata'):
+                    metadata = response.candidates[0].citation_metadata
+                    if metadata and hasattr(metadata, 'citation_sources'):
+                        for source in metadata.citation_sources:
+                            citations_extracted.append( (getattr(source, 'uri', None), getattr(source, 'title', None)) )
+                        logger.info(f"Extracted {len(citations_extracted)} citations via citation_metadata.")
 
-                 # Check response level for grounding_metadata (newer style from user example?)
-                 elif hasattr(response, 'grounding_metadata'):
-                      grounding_meta = response.grounding_metadata
-                      if grounding_meta:
-                           # Extract web search results if available
-                           if hasattr(grounding_meta, 'web_search_results'):
+                # Check response level for grounding_metadata (newer style from user example?)
+                elif hasattr(response, 'grounding_metadata'):
+                    grounding_meta = response.grounding_metadata
+                    if grounding_meta:
+                        # Extract web search results if available
+                        if hasattr(grounding_meta, 'web_search_results'):
                                 for result in grounding_meta.web_search_results:
-                                     citations_extracted.append( (getattr(result, 'uri', None), getattr(result, 'title', None)) )
+                                    citations_extracted.append( (getattr(result, 'uri', None), getattr(result, 'title', None)) )
                                 logger.info(f"Extracted {len(citations_extracted)} citations via grounding_metadata.web_search_results.")
-                           # Extract rendered content snippet if available
-                           if hasattr(grounding_meta, 'search_entry_point') and grounding_meta.search_entry_point:
+                        # Extract rendered content snippet if available
+                        if hasattr(grounding_meta, 'search_entry_point') and grounding_meta.search_entry_point:
                                 rendered_web_content = getattr(grounding_meta.search_entry_point, 'rendered_content', None)
                                 if rendered_web_content:
-                                     logger.info("Extracted rendered web content snippet from grounding metadata.")
+                                    logger.info("Extracted rendered web content snippet from grounding metadata.")
 
-                 # Fallback check inside candidates for grounding_metadata
-                 elif response.candidates and hasattr(response.candidates[0], 'grounding_metadata'):
-                      grounding_meta = response.candidates[0].grounding_metadata
-                      # Repeat extraction logic as above if needed here
-                      if grounding_meta:
-                          if hasattr(grounding_meta, 'web_search_results'):
-                               for result in grounding_meta.web_search_results:
+                # Fallback check inside candidates for grounding_metadata
+                elif response.candidates and hasattr(response.candidates[0], 'grounding_metadata'):
+                    grounding_meta = response.candidates[0].grounding_metadata
+                    # Repeat extraction logic as above if needed here
+                    if grounding_meta:
+                        if hasattr(grounding_meta, 'web_search_results'):
+                            for result in grounding_meta.web_search_results:
                                     citations_extracted.append( (getattr(result, 'uri', None), getattr(result, 'title', None)) )
-                               logger.info(f"Extracted {len(citations_extracted)} citations via candidates[0].grounding_metadata.web_search_results.")
-                          if hasattr(grounding_meta, 'search_entry_point') and grounding_meta.search_entry_point:
-                               rendered_web_content = getattr(grounding_meta.search_entry_point, 'rendered_content', None)
-                               if rendered_web_content:
+                            logger.info(f"Extracted {len(citations_extracted)} citations via candidates[0].grounding_metadata.web_search_results.")
+                        if hasattr(grounding_meta, 'search_entry_point') and grounding_meta.search_entry_point:
+                            rendered_web_content = getattr(grounding_meta.search_entry_point, 'rendered_content', None)
+                            if rendered_web_content:
                                     logger.info("Extracted rendered web content snippet from candidates[0].grounding_metadata.")
 
-                 else:
-                      logger.info("Grounding enabled, but no citation or grounding metadata found in response.")
+                else:
+                    logger.info("Grounding enabled, but no citation or grounding metadata found in response.")
 
             except Exception as cite_err:
                 logger.warning(f"Could not extract grounding/citation metadata: {cite_err}", exc_info=True)
@@ -214,7 +213,7 @@ def generate_text(
         if not response.candidates:
             block_reason = "Unknown"
             try:
-                 if response.prompt_feedback.block_reason: block_reason = response.prompt_feedback.block_reason.name
+                if response.prompt_feedback.block_reason: block_reason = response.prompt_feedback.block_reason.name
             except AttributeError: pass
             logger.error(f"Generation failed: Response blocked or empty. Reason: {block_reason}. Feedback: {getattr(response, 'prompt_feedback', 'N/A')}")
             return None, f"Response blocked by content filter ({block_reason})."
@@ -225,27 +224,27 @@ def generate_text(
         except ValueError: logger.warning(".text attribute error, checking parts.")
         except AttributeError: logger.warning(".text attribute missing, checking parts.")
         if response_text is None:
-             if response.candidates and hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
-                  response_text = "".join(part.text for part in response.candidates[0].content.parts if hasattr(part, 'text'))
+            if response.candidates and hasattr(response.candidates[0], 'content') and hasattr(response.candidates[0].content, 'parts'):
+                response_text = "".join(part.text for part in response.candidates[0].content.parts if hasattr(part, 'text'))
         if response_text is None:
-             logger.error(f"Generation failed: Could not extract text from response. Response structure: {response}")
-             return None, "Failed to extract text from model response."
+            logger.error(f"Generation failed: Could not extract text from response. Response structure: {response}")
+            return None, "Failed to extract text from model response."
 
         # Append extracted citations/web content
         if citations_extracted:
-             citation_str = "\n\n**Sources:**\n"
-             unique_sources = list(dict.fromkeys(citations_extracted)) # Remove duplicates based on (uri, title) pair
-             for i, (uri, title) in enumerate(unique_sources):
-                  display_uri = uri or 'Source link unavailable'
-                  display_text = title or display_uri
-                  if uri: citation_str += f"{i+1}. [{display_text}]({uri})\n"
-                  else: citation_str += f"{i+1}. {display_text}\n"
-             response_text += citation_str
-             logger.debug("Appended grounding citations to response text.")
+            citation_str = "\n\n**Sources:**\n"
+            unique_sources = list(dict.fromkeys(citations_extracted)) # Remove duplicates based on (uri, title) pair
+            for i, (uri, title) in enumerate(unique_sources):
+                display_uri = uri or 'Source link unavailable'
+                display_text = title or display_uri
+                if uri: citation_str += f"{i+1}. [{display_text}]({uri})\n"
+                else: citation_str += f"{i+1}. {display_text}\n"
+            response_text += citation_str
+            logger.debug("Appended grounding citations to response text.")
         if rendered_web_content:
-             # Optionally add the web snippet
-             # response_text += f"\n\n**Web Content Snippet:**\n```html\n{rendered_web_content}\n```"
-             logger.debug("Web content snippet was extracted but not appended by default.")
+            # Optionally add the web snippet
+            # response_text += f"\n\n**Web Content Snippet:**\n```html\n{rendered_web_content}\n```"
+            logger.debug("Web content snippet was extracted but not appended by default.")
 
 
         logger.info(f"Text generation successful (response length: {len(response_text)}).")
@@ -261,19 +260,19 @@ def generate_text(
         elif "permission" in error_str.lower():
             denied_model = model_name
             try:
-                 if "PermissionDenied: 403" in error_str and "permission for" in error_str:
-                     denied_model = error_str.split("permission for '")[1].split("'")[0]
+                if "PermissionDenied: 403" in error_str and "permission for" in error_str:
+                    denied_model = error_str.split("permission for '")[1].split("'")[0]
             except IndexError: pass
             return None, f"Permission denied for resource '{denied_model}'. Check API key permissions."
         elif "User location is not supported" in error_str:
-             return None, f"API Error: User location is not supported for the model or feature (e.g., grounding). ({e})"
+            return None, f"API Error: User location is not supported for the model or feature (e.g., grounding). ({e})"
         elif "grounding" in error_str.lower() or "tool" in error_str.lower():
-             # Make error more specific if possible
-             if "retrieval configuration" in error_str.lower():
-                   return None, f"API Error: Invalid grounding retrieval configuration (e.g., threshold). ({e})"
-             return None, f"API Error related to Grounding/Tools: Model may not support it or config is wrong. ({e})"
+            # Make error more specific if possible
+            if "retrieval configuration" in error_str.lower():
+                return None, f"API Error: Invalid grounding retrieval configuration (e.g., threshold). ({e})"
+            return None, f"API Error related to Grounding/Tools: Model may not support it or config is wrong. ({e})"
         elif "Deadline Exceeded" in error_str:
-             return None, f"API Error: Request timed out (Deadline Exceeded). Try reducing complexity or context. ({e})"
+            return None, f"API Error: Request timed out (Deadline Exceeded). Try reducing complexity or context. ({e})"
         return None, f"API error: {e}"
 
 
