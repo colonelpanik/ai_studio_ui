@@ -158,6 +158,12 @@ When you start a new chat and send the first message:
 
 You can also build and run the application inside a Docker container using the included `Dockerfile`.
 
+# Pre-built image
+
+1.  ```docker pull ghcr.io/colonelpanik/ai_studio_ui:latest```
+
+# Build your own
+
 1.  **Create a `Dockerfile`:**
     Create or use the included file named `Dockerfile`(no extension) in the project root with the content provided in the "Dockerfile Content" section below.
 2.  **Build the Docker image:**
