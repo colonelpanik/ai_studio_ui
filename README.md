@@ -3,7 +3,9 @@
 [![Version](https://img.shields.io/badge/version-2.1.1-blue)](https://github.com/colonelpanik/ai_studio_ui) [![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Framework](https://img.shields.io/badge/Framework-Streamlit-red)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/colonelpanik/ai_studio_ui/YOUR_CI_WORKFLOW.yml?branch=main)](https://github.com/colonelpanik/ai_studio_ui/actions) A versatile Streamlit-based chat interface designed for interacting with Google Gemini models. Enhance your AI conversations with local file context, persistent history, and fine-grained control over generation parameters.
+[![CI Status](https://github.com/colonelpanik/ai_studio_ui/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/colonelpanik/ai_studio_ui/actions/workflows/ci.yaml)
+
+A versatile Streamlit-based chat interface designed for interacting with Google Gemini models, specifically built for text inferencing.
 
 ---
 
