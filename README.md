@@ -1,6 +1,6 @@
 # ✨ AI Studio UI ✨
 
-[![Version](https://img.shields.io/badge/version-2.1.1-blue)](https://github.com/colonelpanik/ai_studio_ui) [![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue)](https://github.com/colonelpanik/ai_studio_ui) [![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![Framework](https://img.shields.io/badge/Framework-Streamlit-red)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI Status](https://github.com/colonelpanik/ai_studio_ui/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/colonelpanik/ai_studio_ui/actions/workflows/ci.yaml)
@@ -27,18 +27,29 @@ A versatile Streamlit-based chat interface designed for interacting with Google 
 
 ---
 
-## About The Project
+##About The Project
 
 AI Studio UI provides a powerful yet user-friendly web interface, named "Gemini Chat Pro", built with Streamlit to leverage the capabilities of Google's Gemini large language models. Its primary goal is to facilitate effective interaction with the AI, particularly for development tasks, code analysis, or any scenario where providing local context (files, code snippets) is crucial.
 
-Unlike simple chat interfaces, AI Studio UI allows you to:
+#Why use AI Studio UI instead of the official Google AI Studio?
 
-* **Inject Local Context:** Select specific files or entire folders from your local machine. The app intelligently scans, filters (based on size and type), and includes the content of relevant files directly into the prompt context for the Gemini model.
-* **Persist Conversations:** Chats aren't lost when you close the browser. Full conversation history, including messages and associated settings (like parameters, instructions, and context paths used), is stored locally in an SQLite database.
-* **Configure & Experiment:** Easily adjust generation parameters (Temperature, Top-K, Top-P, Max Tokens, JSON mode), switch between available Gemini models, and manage system instructions to tailor the AI's responses.
+While Google AI Studio offers a broad range of features (like multimodal capabilities, model tuning options, etc.), AI Studio UI focuses on solving specific pain points encountered during development and context-heavy interactions:
 
-This tool is ideal for developers, researchers, or anyone needing a robust local interface for Gemini that goes beyond basic prompting.
+    🧱 Robust Local Context Handling: Select specific files or entire folders from your local machine. The app intelligently scans, filters (based on size and type), and includes the content of relevant files directly into the prompt context. Unlike web UIs where file management can be manual and static, AI Studio UI:
 
+        Handles recursive directory scanning.
+
+        Dynamically reflects changes made to local files when context is refreshed or rebuilt (Note: requires manually triggering a refresh/update action, not automatic background watching).
+
+    💾 Persistent & Private Conversations: Chats aren't lost when you close the browser. Full conversation history, messages, and associated settings (parameters, instructions, context paths) are stored locally in an SQLite database (gemini_chat_history.db), ensuring privacy and persistence without relying on cloud storage.
+
+    🚀 Performance with Large Context: Based on user feedback, this interface aims to remain responsive and usable even when dealing with large context sizes (e.g., >150k tokens), which can sometimes cause slowdowns or instability in purely web-based environments. (Performance still depends on your local machine and the Gemini API itself).
+
+    ⚙️ Fine-grained Configuration & Control: Easily adjust generation parameters (Temperature, Top-K, Top-P, Max Tokens, JSON mode), switch between available Gemini models, manage system instructions, and now, even manipulate individual messages within a conversation (see Key Features).
+
+    🔧 Open Source & Customizable: As an open-source Streamlit application, you can inspect the code, customize it to your specific needs, and contribute improvements.
+
+This tool is ideal for developers, researchers, or anyone needing a robust, private, local interface for Gemini that excels at integrating extensive, dynamic local file context and offers persistent, manageable chat histories.
 ---
 
 ## Key Features 🚀
@@ -89,7 +100,7 @@ Follow these steps to get AI Studio UI running on your local machine.
     git clone [https://github.com/colonelpanik/ai_studio_ui.git](https://github.com/colonelpanik/ai_studio_ui.git) # Replace with your repo URL if forked
     cd ai_studio_ui
     ```
-2.  **Create `VERSION` file:** Create a file named `VERSION` containing only the current version string (e.g., `2.1.1`). Commit and push this to your repository if you haven't already.
+2.  **Create `VERSION` file:** Create a file named `VERSION` containing only the current version string (e.g., `2.2.0`). Commit and push this to your repository if you haven't already.
 3.  **Set Remote URL in `run.sh`:** Edit the `run.sh` script and replace `YOUR_GITHUB_REPO_RAW_URL/VERSION` with the actual raw URL to your `VERSION` file on GitHub.
 4.  **Make `run.sh` executable:**
     ```bash
@@ -113,7 +124,7 @@ Follow these steps to get AI Studio UI running on your local machine.
     git clone [https://github.com/colonelpanik/ai_studio_ui.git](https://github.com/colonelpanik/ai_studio_ui.git) # Replace with your repo URL if forked
     cd ai_studio_ui
     ```
-2.  **Create `VERSION` file:** (Optional but recommended for `run.sh` later) Create `VERSION` file with the version string (e.g., `2.1.1`).
+2.  **Create `VERSION` file:** (Optional but recommended for `run.sh` later) Create `VERSION` file with the version string (e.g., `2.2.0`).
 3.  **Create a virtual environment (Recommended):**
     ```bash
     python3 -m venv .venv # Or use python instead of python3 if appropriate
