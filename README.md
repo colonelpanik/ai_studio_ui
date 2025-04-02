@@ -6,7 +6,7 @@
 [![CI Status](https://github.com/colonelpanik/ai_studio_ui/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/colonelpanik/ai_studio_ui/actions/workflows/ci.yaml)
 
 A Streamlit-based chat interface for interacting with Google Gemini models, designed for text inferencing with local file context integration.
-
+![AI Studio UI main interface](screenshot.png)
 ---
 
 ## Table of Contents
