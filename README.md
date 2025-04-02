@@ -160,7 +160,7 @@ You can also build and run the application inside a Docker container using the i
 
 # Pre-built image
 
-1.  ```docker pull ghcr.io/colonelpanik/ai_studio_ui:latest```
+1.  ```docker pull ghcr.io/colonelpanik/ai_studio_ui:main``` (or use the Packages link on the right - https://github.com/colonelpanik/ai_studio_ui/pkgs/container/ai_studio_ui)
 
 # Build your own
 
