@@ -1,5 +1,5 @@
 # gemini_logic.py
-# Version: 2.1.1 - Added logging
+# Version: 2.2.0 - Added summarization function
 import google.generativeai as genai
 import google.ai.generativelanguage as glm
 from google.generativeai.types import GenerationConfig, Model
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # --- Configuration (Copied for reference, single source of truth preferred) ---
 # Consider moving these constants to a dedicated config.py if complexity grows
-APP_VERSION = "2.1.1" # Updated version
+APP_VERSION = "2.2.0" # Updated version
 TITLE_MAX_LENGTH = 50
 ALLOWED_EXTENSIONS = {'.py', '.txt', '.md', '.json', '.yaml', '.yml', '.html', '.css', '.js', '.sh', '.bash', '.zsh', '.java', '.c', '.cpp', '.h', '.hpp', '.cs', '.go', '.rb', '.php', '.sql', '.rs', '.swift', '.kt', '.scala', '.pl', '.pm', '.lua', '.toml', '.ini', '.cfg', '.conf', '.dockerfile', 'docker-compose.yml', '.gitignore', '.gitattributes', '.csv', '.tsv', '.xml', '.rst', '.tex', '.R'}
 EXCLUDE_DIRS = {'__pycache__', 'venv', '.venv', '.git', '.idea', '.vscode', 'node_modules', 'build', 'dist', 'target', 'logs', '.pytest_cache', '.mypy_cache', 'site-packages', 'migrations', '__MACOSX', '.DS_Store', 'env'}
@@ -27,6 +27,77 @@ DEFAULT_MODEL = "models/gemini-1.5-flash-latest"
 DEFAULT_MAX_OUTPUT_TOKENS_SLIDER = 4096
 FALLBACK_MODEL_MAX_OUTPUT_TOKENS = 65536
 MAX_HISTORY_PAIRS = 15
+
+DEFAULT_SAFETY_SETTINGS = [
+    # Default safety settings are usually applied by the API.
+    # You can customize them if necessary, e.g., for summarization:
+    # { HarmCategory.HARM_CATEGORY_HARASSMENT: SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
+    # { HarmCategory.HARM_CATEGORY_HATE_SPEECH: SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
+    # { HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
+    # { HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
+]
+
+def summarize_text_for_context(text_to_summarize: str, model_instance: genai.GenerativeModel, context_files_info: str = "Context files were included previously.") -> (str | None, str | None):
+    """
+    Uses the provided Gemini model instance to summarize text for context reduction.
+
+    Args:
+        text_to_summarize: The block of text (e.g., combined messages) to summarize.
+        model_instance: The initialized genai.GenerativeModel instance.
+        context_files_info: Information about context files (e.g., list of rejected files).
+
+    Returns:
+        Tuple (summary_text, error_message). One will be None.
+    """
+    logger.info(f"Attempting to summarize text block (length: {len(text_to_summarize)}) for context reduction.")
+    if not model_instance:
+        logger.error("Summarization failed: Model instance is not available.")
+        return None, "Model instance not available for summarization."
+    if not text_to_summarize.strip():
+        logger.warning("Summarization skipped: Input text is empty.")
+        return "", None # Return empty summary for empty input
+
+    # Construct the prompt based on user's request
+    prompt = f"""You are an expert context summarizer for large language models. The following text represents a portion of a conversation history with a Gemini model that needs to be shortened to reduce token count while preserving essential information for the model's ongoing context.
+
+Summarize the key points, decisions, code snippets, questions asked, and answers given in the text below. Maintain the chronological flow where possible. Be concise but ensure that the Gemini model reading this summary later will understand the state of the conversation without losing critical details needed to continue accurately.
+
+{context_files_info}
+
+--- Text to Summarize ---
+{text_to_summarize}
+--- End Text to Summarize ---
+
+Provide only the summary below:"""
+
+    try:
+        logger.debug(f"Sending summarization prompt to model: {model_instance.model_name}")
+        # Use a potentially simpler generation config for summarization
+        summarization_config = GenerationConfig(
+            temperature=0.3, # Lower temp for more factual summary
+            max_output_tokens=max(1024, int(model_instance.output_token_limit * 0.2)) # Allow reasonable length, up to 20% of model limit or 1024
+        )
+        # Use generate_content for a single non-chat turn
+        response = model_instance.generate_content(
+            prompt,
+            generation_config=summarization_config,
+            safety_settings=DEFAULT_SAFETY_SETTINGS # Apply safety settings
+            )
+
+        # Check for blocked response
+        if not response.candidates:
+             logger.error(f"Summarization response was blocked. Prompt Feedback: {response.prompt_feedback}")
+             block_reason = response.prompt_feedback.block_reason.name if response.prompt_feedback.block_reason else "Unknown"
+             return None, f"Summarization failed: Response blocked by safety filters (Reason: {block_reason}). Check logs for details."
+
+        summary = response.text
+        logger.info(f"Summarization successful (summary length: {len(summary)}).")
+        return summary, None
+
+    except Exception as e:
+        logger.error(f"Error during summarization API call: {e}", exc_info=True)
+        return None, f"Summarization failed due to API error: {e}"
+
 
 # --- Helper Functions ---
 def is_file_allowed(file_path: Path):

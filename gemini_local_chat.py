@@ -1,6 +1,6 @@
 # gemini_local_chat.py
-# Version: 2.1.1 - Fixed state update after refactor, basic logging added
-# NOTE: This requires database.py Version 2.1 or later and gemini_logic.py v2.1.1+
+# Version: 2.2.0 - Added message controls (Delete, Edit, Regenerate, Summarize)
+# NOTE: This requires database.py Version 2.2+ and gemini_logic.py v2.2+
 
 import streamlit as st
 import google.generativeai as genai
@@ -34,7 +34,7 @@ with col_main:
 
 # --- Initialize Session State (Defaults are crucial) ---
 # Basic state
-if "messages" not in st.session_state: st.session_state.messages = []
+if "messages" not in st.session_state: st.session_state.messages = [] # Will store dicts with id, role, content, timestamp
 if "gemini_history" not in st.session_state: st.session_state.gemini_history = []
 if "current_conversation_id" not in st.session_state: st.session_state.current_conversation_id = None
 if "loaded_conversations" not in st.session_state: st.session_state.loaded_conversations = []
@@ -51,6 +51,9 @@ if "current_model_max_output_tokens" not in st.session_state: st.session_state.c
 # Instruction state
 if "system_instruction" not in st.session_state: st.session_state.system_instruction = ""
 if "instruction_names" not in st.session_state: st.session_state.instruction_names = db.get_instruction_names()
+if "editing_message_id" not in st.session_state: st.session_state.editing_message_id = None
+if "editing_message_content" not in st.session_state: st.session_state.editing_message_content = ""
+
 # --- Generation parameters state (THESE ARE THE DEFAULTS FOR A *NEW* CHAT) ---
 DEFAULT_GEN_CONFIG = {
     "temperature": 0.7,
@@ -73,6 +76,28 @@ if 'current_api_key' not in st.session_state: st.session_state.current_api_key =
 
 # --- Function to Update State from Logic ---
 # Encapsulates the state update logic after calling the refactored function
+def reload_conversation_state(conversation_id):
+    """Fetches messages and updates session state."""
+    logger.info(f"Reloading state for conversation ID: {conversation_id}")
+    if not conversation_id:
+        st.session_state.messages = []
+        st.session_state.gemini_history = []
+        logger.debug("Cleared messages and history as conversation ID is None.")
+        return
+
+    loaded_messages = db.get_conversation_messages(conversation_id, include_ids_timestamps=True)
+    st.session_state.messages = loaded_messages
+    # Reconstruct history carefully, ensuring correct order and format
+    st.session_state.gemini_history = logic.reconstruct_gemini_history(
+        [{"role": m["role"], "content": m["content"]} for m in loaded_messages] # Pass only role/content
+    )
+    # Apply history limit
+    if len(st.session_state.gemini_history) > MAX_HISTORY_PAIRS * 2:
+        logger.warning(f"History truncated during reload ({len(st.session_state.gemini_history)} -> {MAX_HISTORY_PAIRS*2})")
+        st.session_state.gemini_history = st.session_state.gemini_history[-(MAX_HISTORY_PAIRS * 2):]
+
+    logger.debug(f"Reloaded {len(loaded_messages)} messages and reconstructed history ({len(st.session_state.gemini_history)} pairs).")
+
 def update_state_from_logic():
     try:
         token_count, token_str, details, content_dict = logic.update_context_and_tokens(
@@ -117,6 +142,7 @@ if st.sidebar.button("➕ New Chat", key="new_chat_button"):
     st.session_state.messages = []
     st.session_state.gemini_history = []
     st.session_state.current_conversation_id = None
+    st.session_state.editing_message_id = None # Clear editing state
     # Reset context, instructions, and parameters to default for a new chat
     st.session_state.added_paths = set()
     st.session_state.system_instruction = ""
@@ -130,9 +156,8 @@ if st.sidebar.button("➕ New Chat", key="new_chat_button"):
         st.session_state.max_output_tokens = limit
     elif st.session_state.max_output_tokens <= 0:
         st.session_state.max_output_tokens = min(DEFAULT_MAX_OUTPUT_TOKENS_SLIDER, limit)
-
+    update_state_from_logic() # Recalculate tokens
     st.rerun()
-
 st.session_state.loaded_conversations = db.get_recent_conversations(limit=15)
 
 st.sidebar.markdown("---")
@@ -142,86 +167,95 @@ else:
     st.sidebar.caption("Recent Chats:")
     for convo in st.session_state.loaded_conversations:
         convo_id = convo["id"]
-        convo_title = convo["title"] or db.PLACEHOLDER_TITLE
-        display_title = (convo_title[:TITLE_MAX_LENGTH] + '...') if len(convo_title) > TITLE_MAX_LENGTH + 3 else convo_title        
+        # ... [Keep existing conversation title formatting] ...
         button_type = "primary" if convo_id == st.session_state.get("current_conversation_id") else "secondary"
 
-        col1, col2 = st.sidebar.columns([9, 1])
+        # col1, col2 = st.sidebar.columns([9, 1]) # Keep Delete Button if needed, or just one button
+        # with col1:
+st.sidebar.markdown("---")
+if not st.session_state.loaded_conversations:
+    st.sidebar.caption("No past conversations found.")
+else:
+    st.sidebar.caption("Recent Chats:")
+    for convo in st.session_state.loaded_conversations:
+        convo_id = convo["id"]
+        convo_title = convo["title"] or db.PLACEHOLDER_TITLE # Raw title from DB
+
+        # Create the potentially truncated title
+        raw_display_title = (convo_title[:TITLE_MAX_LENGTH] + '...') if len(convo_title) > TITLE_MAX_LENGTH + 3 else convo_title
+
+        display_title_escaped = raw_display_title.replace("{", "{{").replace("}", "}}")
+
+        button_type = "primary" if convo_id == st.session_state.get("current_conversation_id") else "secondary"
+
+        col1, col2 = st.sidebar.columns([0.85, 0.15]) # Adjust ratio as needed
         with col1:
-            if st.sidebar.button(f"{display_title}", key=f"load_conv_{convo_id}", help=f"Load: {convo_title}", use_container_width=True, type=button_type):
+            # Load Button
+            if st.button(f"{display_title_escaped}", key=f"load_conv_{convo_id}", help=f"Load: {convo_title}", use_container_width=True, type=button_type):
                 if convo_id != st.session_state.get("current_conversation_id"):
-                    logger.info(f"Loading conversation ID: {convo_id}, Title: {display_title}")
-                    with st.spinner(f"Loading chat: {display_title}..."):
-                        loaded_messages = db.get_conversation_messages(convo_id)
-                        if loaded_messages is None:
-                            st.error(f"Failed to load messages for chat {display_title}.")
-                            logger.error(f"Failed to load messages for conversation ID: {convo_id}")
-                            continue
-                logger.info(f"Loading conversation ID: {convo_id}, Title: {display_title}")
-                with st.spinner(f"Loading chat: {display_title}..."):
-                    loaded_messages = db.get_conversation_messages(convo_id)
-                    if loaded_messages is None:
-                        st.error(f"Failed to load messages for chat {display_title}.")
-                        logger.error(f"Failed to load messages for conversation ID: {convo_id}")
-                        continue
-
-                    loaded_metadata = db.get_conversation_metadata(convo_id)
-                    if loaded_metadata is None:
-                        st.warning(f"Could not load settings for chat {display_title}. Using current/default settings.")
-                        logger.warning(f"Could not load metadata for conversation ID: {convo_id}")
-
-                    # Update State (Messages first)
-                    st.session_state.messages = loaded_messages
-                    st.session_state.gemini_history = logic.reconstruct_gemini_history(loaded_messages)
-                    if len(st.session_state.gemini_history) > MAX_HISTORY_PAIRS * 2:
-                        st.session_state.gemini_history = st.session_state.gemini_history[-(MAX_HISTORY_PAIRS * 2):]
-                    st.session_state.current_conversation_id = convo_id
-                    logger.debug(f"Messages and history loaded for {convo_id}.")
-
-                    # Update State (Settings) - *ONLY IF* metadata loaded successfully
-                    if loaded_metadata:
-                        st.session_state.system_instruction = loaded_metadata.get("system_instruction", "")
-                        st.session_state.added_paths = loaded_metadata.get("added_paths", set())
-
-                        loaded_gen_config = loaded_metadata.get("generation_config")
-                        if loaded_gen_config:
-                            logger.info(f"Applying saved settings for conversation {convo_id}")
-                            for key, value in DEFAULT_GEN_CONFIG.items():
-                                if key in loaded_gen_config:
-                                    st.session_state[key] = loaded_gen_config[key]
-                                else: # If a key is missing from saved config, use default
-                                    st.session_state[key] = value
-                                    logger.warning(f"Config key '{key}' not found in saved metadata for {convo_id}, using default.")
+                    logger.info(f"Loading conversation ID: {convo_id}, Title: {raw_display_title}")
+                    st.session_state.editing_message_id = None
+                    with st.spinner(f"Loading chat: {raw_display_title}..."):
+                        reload_conversation_state(convo_id)
+                        loaded_metadata = db.get_conversation_metadata(convo_id)
+                        if loaded_metadata is None:
+                             st.warning(f"Could not load settings for chat {raw_display_title}. Using current/default settings.")
+                             logger.warning(f"Could not load metadata for conversation ID: {convo_id}")
                         else:
-                            logger.warning(f"No generation config saved for {convo_id}, resetting to defaults.")
-                            for key, value in DEFAULT_GEN_CONFIG.items():
-                                st.session_state[key] = value
+                             # Update State (Settings)
+                             st.session_state.system_instruction = loaded_metadata.get("system_instruction", "")
+                             st.session_state.added_paths = loaded_metadata.get("added_paths", set())
+                             loaded_gen_config = loaded_metadata.get("generation_config")
+                             if loaded_gen_config:
+                                 logger.info(f"Applying saved settings for conversation {convo_id}")
+                                 for key, value in DEFAULT_GEN_CONFIG.items():
+                                     st.session_state[key] = loaded_gen_config.get(key, value) # Use .get for safety
+                                     if key not in loaded_gen_config:
+                                         logger.warning(f"Config key '{key}' not found in saved metadata for {convo_id}, using default.")
+                             else:
+                                 logger.warning(f"No generation config saved for {convo_id}, resetting to defaults.")
+                                 for key, value in DEFAULT_GEN_CONFIG.items():
+                                     st.session_state[key] = value
 
-                        limit = st.session_state.get('current_model_max_output_tokens', FALLBACK_MODEL_MAX_OUTPUT_TOKENS)
-                        if st.session_state.max_output_tokens > limit:
-                            st.session_state.max_output_tokens = limit
-                        elif st.session_state.max_output_tokens <= 0:
-                            st.session_state.max_output_tokens = min(DEFAULT_MAX_OUTPUT_TOKENS_SLIDER, limit)
-                        logger.debug(f"Settings applied for {convo_id}.")
+                             # Clamp max tokens based on potentially loaded model limit
+                             limit = st.session_state.get('current_model_max_output_tokens', FALLBACK_MODEL_MAX_OUTPUT_TOKENS)
+                             if st.session_state.max_output_tokens > limit: st.session_state.max_output_tokens = limit
+                             elif st.session_state.max_output_tokens <= 0: st.session_state.max_output_tokens = min(DEFAULT_MAX_OUTPUT_TOKENS_SLIDER, limit)
+                             logger.debug(f"Settings applied for {convo_id}.")
 
-                    # Update context/tokens using the state update function
-                    update_state_from_logic()
-
-                    st.success(f"Loaded chat: {display_title}")
-                    st.rerun()
-            else:
-                logger.debug(f"Conversation {convo_id} already loaded.")
+                        update_state_from_logic()
+                        st.session_state.current_conversation_id = convo_id
+                        st.success(f"Loaded chat: {raw_display_title}")
+                        st.rerun()
+                else:
+                    logger.debug(f"Conversation {convo_id} already loaded. Click ignored.")
+                    st.toast("Chat already loaded.", icon="ℹ️")
         with col2:
-            if st.sidebar.button("❌", key=f"delete_conv_{convo_id}", help=f"Delete: {convo_title}", use_container_width=True, type="secondary"):
-                logger.warning(f"Attempting to delete conversation '{convo_id}'")
+            if st.button("❌", key=f"delete_conv_{convo_id}", help=f"Delete: {convo_title}", use_container_width=True, type="secondary"):
+                logger.warning(f"Attempting to delete conversation '{raw_display_title}' (ID: {convo_id})")
+                # Use the delete_conversation function from database.py
                 success, message = db.delete_conversation(convo_id)
                 if success:
                     st.success(message)
                     logger.info(message)
+                    # If the deleted conversation was the current one, reset state
+                    if convo_id == st.session_state.get("current_conversation_id"):
+                        st.session_state.messages = []
+                        st.session_state.gemini_history = []
+                        st.session_state.current_conversation_id = None
+                        st.session_state.editing_message_id = None
+                        st.session_state.added_paths = set()
+                        st.session_state.system_instruction = ""
+                        for key, value in DEFAULT_GEN_CONFIG.items():
+                            st.session_state[key] = value
+                        update_state_from_logic()
+                        logger.info("Cleared state as current conversation was deleted.")
+                    # Refresh the list regardless
                     st.session_state.loaded_conversations = db.get_recent_conversations(limit=15)
                     st.rerun()
                 else:
-                    st.sidebar.info("Chat already loaded.") # Optional: uncomment for feedback
+                    st.error(message)
+                    logger.error(f"Failed to delete conversation {convo_id}: {message}")
 
 
 # --- API Key & Model Config (Sidebar) ---
@@ -611,14 +645,25 @@ if st.sidebar.button("Refresh Tokens", key="refresh_tokens_btn"):
 st.sidebar.markdown("---")
 if st.sidebar.button("Clear Current Chat History"):
     logger.warning("Clearing current chat history (messages only).")
-    st.session_state.messages = []
-    st.session_state.gemini_history = []
-    # Note: This does NOT clear context, instructions, or parameters. Use New Chat for that.
-    st.rerun()
-
+    # This needs refinement - should delete messages from DB for the current convo?
+    # For now, just clears UI state, but they remain in DB.
+    # A better approach might be to delete from DB and reload.
+    # Let's implement the DB deletion for clarity.
+    current_convo_id = st.session_state.get("current_conversation_id")
+    if current_convo_id:
+        logger.info(f"Deleting all messages for current conversation: {current_convo_id}")
+        # We need a function db.delete_all_messages(conversation_id) or similar
+        # Placeholder: Reloading an empty state achieves the visual effect for now
+        # but doesn't clean the DB. Add db.delete_all_messages if needed.
+        st.session_state.messages = []
+        st.session_state.gemini_history = []
+        st.session_state.editing_message_id = None # Clear editing state
+        # Optionally, update conversation timestamp or reset title?
+        st.rerun()
+    else:
+        st.toast("No active conversation to clear.")
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"<small>Version: {APP_VERSION} | {PAGE_TITLE}</small>", unsafe_allow_html=True)
-
 
 # ==============================================
 # --- Main Chat Area (Left/Center Column) ---
@@ -629,14 +674,6 @@ with col_main:
     chat = None
     if model:
         try:
-            # Reconstruct history based *only* on messages relevant to the current conversation ID
-            # Filter messages for the current conversation before reconstructing
-            current_convo_messages = [
-                msg for msg in st.session_state.messages
-                # This assumes messages have a conversation_id, which they don't in the current structure.
-                # We should reconstruct based on st.session_state.messages directly when a convo is loaded.
-            ]
-
             # Use the history stored in session state, which is updated when loading/sending messages
             current_gemini_history = st.session_state.get("gemini_history", [])
 
@@ -673,164 +710,73 @@ with col_main:
     elif not model:
         st.warning("Select/Initialize Model (in sidebar).")
 
-    # Display previous chat messages (from st.session_state.messages)
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    # --- Check for Pending API Call ---
+    # Process this *before* displaying messages or input, as it might cause a rerun
+    if "pending_api_call" in st.session_state and st.session_state.pending_api_call:
+        pending_data = st.session_state.pending_api_call
+        logger.info("Processing pending API call...")
+        # Clear the flag immediately
+        del st.session_state["pending_api_call"]
 
-    # Get user input
-    prompt = st.chat_input("Ask a question...")
-
-    if prompt:
-        logger.info(f"User prompt received: '{prompt[:50]}...'")
-        # Prerequisites Check
-        if not st.session_state.current_api_key:
-            st.error("API Key required.")
-            logger.error("Chat halted: API key missing.")
-            st.stop()
+        # Ensure model/chat are ready (redundant check might be ok)
         if not model:
-            # Attempt re-initialization one last time if needed
-            if st.session_state.selected_model_name and st.session_state.current_api_key:
-                logger.warning("Model instance missing just before sending message, attempting final re-initialization.")
-                try:
+             # Attempt re-initialization one last time
+             if st.session_state.selected_model_name and st.session_state.current_api_key:
+                 logger.warning("Model instance missing for pending call, attempting final re-initialization.")
+                 try:
                      model = genai.GenerativeModel(st.session_state.selected_model_name)
                      st.session_state.current_model_instance = model
-                     logger.info("Model re-initialized successfully before sending.")
-                except Exception as e:
+                     logger.info("Model re-initialized successfully for pending call.")
+                 except Exception as e:
                      st.error(f"Model not ready. Failed to re-initialize: {e}")
-                     logger.error(f"Chat halted: Failed to re-initialize model '{st.session_state.selected_model_name}': {e}", exc_info=True)
+                     logger.error(f"Pending call halted: Failed to re-initialize model '{st.session_state.selected_model_name}': {e}", exc_info=True)
                      st.session_state.current_model_instance = None
                      st.stop()
-            else:
-                 st.error("Model not ready.")
-                 logger.error("Chat halted: Model not ready (no instance, key, or name).")
+             else:
+                 st.error("Model not ready for pending API call.")
+                 logger.error("Pending API call aborted: Model not ready.")
                  st.stop()
 
-        # Ensure chat object exists (might need re-init if history changed significantly)
+        # Ensure chat object is ready
         if not chat:
              try:
-                 logger.warning("Chat object missing, attempting to restart chat session.")
+                 logger.warning("Chat object missing for pending call, attempting to restart chat session.")
                  current_gemini_history = st.session_state.get("gemini_history", [])
                  if len(current_gemini_history) > MAX_HISTORY_PAIRS * 2:
                      current_gemini_history = current_gemini_history[-(MAX_HISTORY_PAIRS * 2):]
                      st.session_state.gemini_history = current_gemini_history
                  chat = model.start_chat(history=current_gemini_history)
-                 logger.info("Chat session restarted successfully.")
+                 logger.info("Chat session restarted successfully for pending call.")
              except Exception as e:
-                 st.error(f"Failed to restart chat session: {e}")
-                 logger.error(f"Chat halted: Failed to restart chat session: {e}", exc_info=True)
+                 st.error(f"Failed to restart chat session for pending call: {e}")
+                 logger.error(f"Pending call halted: Failed to restart chat session: {e}", exc_info=True)
                  st.stop()
+
         if not chat: # Final check
-            st.error("Chat session could not be initialized.")
-            logger.critical("Chat halted: Chat session is None after attempting restart.")
-            st.stop()
+             st.error("Chat session could not be initialized for pending call.")
+             logger.critical("Pending call halted: Chat session is None after attempting restart.")
+             st.stop()
 
-        # --- Conversation ID & Metadata Management ---
-        active_conversation_id = st.session_state.current_conversation_id
-        is_first_message = not active_conversation_id
 
-        if is_first_message:
-            logger.info("First message in a new conversation.")
-            # Start a new conversation in DB
-            new_conv_id = db.start_new_conversation()
-            if new_conv_id:
-                st.session_state.current_conversation_id = new_conv_id
-                active_conversation_id = new_conv_id
-                logger.info(f"New conversation created with ID: {active_conversation_id}")
-                # --- Save Metadata on First Message ---
-                try:
-                    logger.debug(f"Saving initial metadata for conversation {active_conversation_id}")
-                    # 1. Generate Title
-                    new_title = prompt[:TITLE_MAX_LENGTH].strip()
-                    if not new_title: new_title = f"Chat {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}" # Fallback title
-                    logger.debug(f"Generated title: {new_title}")
+        active_conversation_id = pending_data["convo_id"]
+        prompt_to_send = pending_data["prompt"]
 
-                    # 2. Gather Current Settings
-                    current_gen_config = {
-                        key: st.session_state[key] for key in DEFAULT_GEN_CONFIG.keys()
-                    }
-                    current_instruction = st.session_state.system_instruction
-                    current_paths = st.session_state.added_paths # Already a set
-                    logger.debug(f"Saving settings: Config={current_gen_config}, Instruction='{current_instruction[:30]}...', Paths={current_paths}")
-
-                    # 3. Update DB
-                    update_success = db.update_conversation_metadata(
-                        conversation_id=active_conversation_id,
-                        title=new_title,
-                        generation_config=current_gen_config,
-                        system_instruction=current_instruction,
-                        added_paths=current_paths
-                    )
-                    if update_success:
-                        logger.info(f"Saved initial metadata for conversation {active_conversation_id}")
-                        # Refresh conversation list in sidebar needed to show new title
-                        st.session_state.loaded_conversations = db.get_recent_conversations(limit=15)
-                        # st.rerun() # Rerun might be slightly disruptive here, but needed to update sidebar title
-                    else:
-                         logger.error(f"Failed to save initial metadata for conversation {active_conversation_id}")
-                         st.warning("Failed to save conversation settings (title, parameters, etc.).")
-
-                except Exception as meta_save_err:
-                    st.error(f"Failed to save conversation metadata: {meta_save_err}")
-                    logger.error(f"Error saving initial metadata for {active_conversation_id}: {meta_save_err}", exc_info=True)
-                    # Proceed with chat anyway, but settings won't be saved
-            else:
-                st.error("Failed to create a new conversation record in the database.")
-                logger.critical("Failed to create new conversation record in DB.")
-                st.stop()
-        else:
-            # Use existing conversation ID
-            logger.debug(f"Continuing conversation ID: {active_conversation_id}")
-
-        # Add user message to UI state FIRST
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # --- Prepare for API Call ---
-        # Use context potentially loaded or currently set
+        # Retrieve necessary context/instruction state (should be correct from the previous run state)
         context_content_dict = st.session_state.get('current_context_content_dict', {})
-        context_files_list = list(context_content_dict.keys()) # For saving to DB
-        if context_content_dict:
-            context = logic.format_context(context_content_dict, st.session_state.added_paths)
-            logger.debug(f"Formatted context for prompt ({len(context_files_list)} files).")
-        else:
-            context = "No local file context provided." # Explicitly state no context
-            logger.debug("No local file context provided for prompt.")
+        context_files_list = list(context_content_dict.keys()) # Needed? Maybe not here.
+        # context = logic.format_context(context_content_dict, st.session_state.added_paths) if context_content_dict else "No local file context provided."
+        # system_instruction = st.session_state.get("system_instruction", "").strip()
+        # instruction_prefix = f"--- System Instruction ---\n{system_instruction}\n--- End System Instruction ---\n\n" if system_instruction else ""
+        # full_prompt_for_log was already saved with the user message.
 
-        # Use system instruction potentially loaded or currently set
-        system_instruction = st.session_state.get("system_instruction", "").strip()
-        instruction_prefix = f"--- System Instruction ---\n{system_instruction}\n--- End System Instruction ---\n\n" if system_instruction else ""
-        if system_instruction:
-            logger.debug("Prepending system instruction to prompt.")
-
-        # Combine parts for the actual prompt sent to the model (and logging)
-        # IMPORTANT: The Gemini API's `start_chat` manages history. We send *only the new prompt* to `send_message`.
-        # The `full_prompt` below is primarily for logging/debugging what the conceptual input is.
-        full_prompt_for_log = instruction_prefix + context + "\n\n---\n\nUser Question:\n" + prompt
-        logger.debug(f"Full conceptual prompt for log (first 200 chars): {full_prompt_for_log[:200]}...")
-
-        # --- Save User Message to DB ---
-        # Now includes automatic timestamp update for the conversation
-        logger.debug(f"Saving user message to DB for conversation {active_conversation_id}")
-        save_user_success = db.save_message(
-            conversation_id=active_conversation_id, role='user', content=prompt,
-            model_used=st.session_state.selected_model_name,
-            context_files=context_files_list, # Save list of files used
-            full_prompt_sent=full_prompt_for_log # Save the conceptual full prompt
-        )
-        if not save_user_success:
-            st.warning("Failed to save user message to the database.") # Non-fatal
-
-        # --- Prepare Generation Config ---
-        generation_config = None # Initialize
+        # Prepare Generation Config
+        generation_config = None
         try:
-            logger.debug("Preparing generation config.")
+            logger.debug("Preparing generation config for pending API call.")
             stop_sequences = [seq.strip() for seq in st.session_state.stop_sequences_str.splitlines() if seq.strip()]
-            # Ensure max tokens doesn't exceed model limit *and* is positive
             model_limit = st.session_state.get('current_model_max_output_tokens', FALLBACK_MODEL_MAX_OUTPUT_TOKENS)
             user_setting = st.session_state.max_output_tokens
-            max_tokens_for_api = max(1, min(user_setting, model_limit)) # Ensure at least 1
+            max_tokens_for_api = max(1, min(user_setting, model_limit))
             if user_setting != max_tokens_for_api:
                 logger.warning(f"Adjusted max_output_tokens from {user_setting} to {max_tokens_for_api} due to model limit ({model_limit}) or minimum value.")
 
@@ -839,93 +785,374 @@ with col_main:
                 "top_p": st.session_state.top_p,
                 "top_k": st.session_state.top_k,
                 "max_output_tokens": max_tokens_for_api,
-                # Only include stop_sequences if list is not empty
                 **({"stop_sequences": stop_sequences} if stop_sequences else {})
             }
-            # Add JSON mode if toggled
             if st.session_state.json_mode:
                 gen_config_dict_api["response_mime_type"] = "application/json"
-                logger.debug("JSON output mode enabled.")
+                logger.debug("JSON output mode enabled for pending call.")
 
-            logger.debug(f"Generation config for API: {gen_config_dict_api}")
-            # Convert to GenerationConfig object for send_message
+            logger.debug(f"Generation config for pending API call: {gen_config_dict_api}")
             generation_config = GenerationConfig(**gen_config_dict_api)
 
         except Exception as e:
-            st.error(f"Error creating generation config: {e}")
-            logger.error(f"Error creating GenerationConfig object: {e}", exc_info=True)
-            generation_config = None # Ensure it's None if creation fails
+            st.error(f"Error creating generation config for pending call: {e}")
+            logger.error(f"Error creating GenerationConfig object for pending call: {e}", exc_info=True)
+            generation_config = None
+            # Need to decide how to handle this - stop or try default? Let's stop.
             st.stop()
+
 
         # --- Send to Gemini & Display Response ---
         if generation_config is not None:
             try:
-                logger.info(f"Sending prompt to model: {st.session_state.selected_model_name}")
+                logger.info(f"Sending pending prompt to model: {st.session_state.selected_model_name}")
+                # We need to display the response within the chat message context
                 with st.chat_message("assistant"):
                     message_placeholder = st.empty()
                     full_response_content = ""
                     model_short_name = Path(st.session_state.selected_model_name).name if st.session_state.selected_model_name else "Gemini"
 
-                    with st.spinner(f"Asking {model_short_name}..."):
+                    with st.spinner(f"Asking {model_short_name}... (Processing pending request)"):
                         # Send only the user's latest message to the chat object
                         response = chat.send_message(
-                            prompt,
+                            prompt_to_send, # Use the prompt from the pending data
                             stream=True,
                             generation_config=generation_config # Pass the config object
                             )
 
-                    logger.debug("Streaming response from model...")
+                    logger.debug("Streaming response from model for pending call...")
                     for chunk in response:
-                        # Check for text content in the chunk
                         chunk_text = getattr(chunk, 'text', None)
                         if chunk_text:
                             full_response_content += chunk_text
                             message_placeholder.markdown(full_response_content + "▌")
-                        # Log potential non-text parts if needed for debugging
-                        # else:
-                        #    logger.debug(f"Received non-text chunk: {chunk}")
 
                     message_placeholder.markdown(full_response_content) # Final display
-                    logger.info(f"Response received (length: {len(full_response_content)}).")
+                    logger.info(f"Response received for pending call (length: {len(full_response_content)}).")
 
-                # Add AI response to UI history *AND* internal gemini_history
-                st.session_state.messages.append({"role": "assistant", "content": full_response_content})
-                # Update gemini_history (internal API state) - crucial for chat context
-                # The chat object's history updates internally, but we mirror it for robustness/re-initialization
-                st.session_state.gemini_history = logic.reconstruct_gemini_history(st.session_state.messages)
-                if len(st.session_state.gemini_history) > MAX_HISTORY_PAIRS * 2:
-                     logger.warning("Truncating internal history state after response.")
-                     st.session_state.gemini_history = st.session_state.gemini_history[-(MAX_HISTORY_PAIRS * 2):]
-                logger.debug("Assistant message added to UI and internal history state.")
-
-
-                # --- Save AI Response to DB ---
-                # Also updates conversation timestamp automatically
-                logger.debug(f"Saving assistant message to DB for conversation {active_conversation_id}")
+                # Add AI response to UI history AND internal gemini_history
+                # We need the timestamp and ID - save to DB first, then reload state
+                logger.debug(f"Saving assistant message from pending call to DB for conversation {active_conversation_id}")
                 save_assist_success = db.save_message(
                     conversation_id=active_conversation_id, role='assistant', content=full_response_content,
                     model_used=st.session_state.selected_model_name
-                    # No need to save context/full prompt for assistant message
                 )
                 if not save_assist_success:
                     st.warning("Failed to save assistant response to the database.")
+                    # Reload state anyway to try and recover UI consistency
+                    reload_conversation_state(active_conversation_id)
+                    st.rerun()
+                else:
+                    # Reload state one last time to ensure DB and UI are synced after assistant message
+                    reload_conversation_state(active_conversation_id)
+                    # Rerun to update display and potentially sidebar order
+                    st.rerun() # Final rerun for this interaction cycle
 
             except Exception as e:
-                st.error(f"Error during Gemini communication: {e}")
-                logger.error(f"Error during chat.send_message or response processing: {e}", exc_info=True)
-                # Rollback last user message from UI state if an error occurs during response generation
-                if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-                    st.session_state.messages.pop()
-                    logger.warning("Rolled back last user message from UI state due to API error.")
-                # Also rollback internal history state
-                if st.session_state.gemini_history and st.session_state.gemini_history[-1]["role"] == "user":
-                    st.session_state.gemini_history.pop()
-                    logger.warning("Rolled back last user message from internal history state due to API error.")
+                st.error(f"Error during Gemini communication for pending call: {e}")
+                logger.error(f"Error during chat.send_message or response processing for pending call: {e}", exc_info=True)
+                # Reload state to ensure consistency despite error?
+                reload_conversation_state(active_conversation_id)
+                st.rerun()
+        else:
+             logger.error("Pending API call aborted: Generation config was None.")
+             # Reload state to be safe
+             reload_conversation_state(active_conversation_id)
+             st.rerun()
 
-            # Rerun after sending message to update sidebar list order (due to timestamp update)
-            # Only rerun if the message was sent/processed, not necessarily if saving failed.
-            if 'response' in locals(): # Check if API call was attempted
-                 st.rerun()
+
+    # --- Display Chat Messages with Controls ---
+    # Reload state ensures messages are up-to-date before display
+    current_convo_id_for_display = st.session_state.get("current_conversation_id")
+    if current_convo_id_for_display: # Only show messages if a conversation is active
+        # Optionally display current convo ID - removed for cleaner look maybe
+        # st.info(f"Conversation ID: {current_convo_id_for_display}", icon="🆔")
+
+        # Create a container for messages
+        message_container = st.container() # Adjust height if desired: height=600
+
+        with message_container:
+            # Use a copy of the messages list for safe iteration if actions cause reruns
+            messages_to_display = list(st.session_state.get("messages", []))
+
+            for i, message in enumerate(messages_to_display):
+                msg_id = message.get("id")
+                msg_role = message.get("role")
+                msg_content = message.get("content")
+                msg_timestamp = message.get("timestamp") # Needed for delete_after actions
+
+                if not all([msg_id, msg_role is not None, msg_content is not None, msg_timestamp]):
+                    logger.error(f"Skipping message at index {i} due to missing data: {message}")
+                    continue # Skip malformed messages
+
+                with st.chat_message(msg_role):
+                    # Use columns for content and controls
+                    col_content, col_controls = st.columns([0.9, 0.1]) # Adjust ratio as needed
+
+                    with col_content:
+                        st.markdown(msg_content)
+
+                    with col_controls:
+                        # Create a mini-container for buttons
+                        button_container = st.container()
+                        with button_container:
+                            # --- Delete Button ---
+                            if st.button("🗑️", key=f"del_{msg_id}", help="Delete this message", use_container_width=True):
+                                logger.warning(f"User initiated delete for message ID: {msg_id}")
+                                success, db_msg = db.delete_message_by_id(msg_id)
+                                if success:
+                                    st.toast(db_msg, icon="✅")
+                                    # No need to manually update state, reload will handle it
+                                    reload_conversation_state(st.session_state.current_conversation_id)
+                                    logger.info(f"Message {msg_id} deleted from DB. Reloading state.")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Failed to delete message: {db_msg}")
+                                    logger.error(f"Failed DB delete for message ID {msg_id}: {db_msg}")
+
+                            # --- Edit Button (Only for User Messages) ---
+                            if msg_role == "user":
+                                if st.button("✏️", key=f"edit_{msg_id}", help="Edit this message (deletes subsequent history)", use_container_width=True):
+                                    logger.info(f"User initiated edit for message ID: {msg_id}")
+                                    # Set state to indicate editing mode
+                                    st.session_state.editing_message_id = msg_id
+                                    st.session_state.editing_message_content = msg_content
+                                    st.rerun() # Rerun to change the chat input area
+
+                            # --- Regenerate Button (Only for Assistant Messages) ---
+                            if msg_role == "assistant":
+                                # Find the preceding user message
+                                preceding_user_msg = None
+                                if i > 0:
+                                     potential_user_msg = messages_to_display[i-1]
+                                     if potential_user_msg.get('role') == 'user':
+                                         preceding_user_msg = potential_user_msg
+
+                                if preceding_user_msg:
+                                     user_msg_id = preceding_user_msg['id']
+                                     user_msg_timestamp = preceding_user_msg['timestamp']
+                                     user_msg_content = preceding_user_msg['content']
+
+                                     if st.button("🔄", key=f"regen_{msg_id}", help="Regenerate this response (deletes subsequent history)", use_container_width=True):
+                                         logger.warning(f"User initiated regenerate for assistant message ID: {msg_id} (based on user msg {user_msg_id})")
+                                         # 1. Delete messages AFTER the preceding user message
+                                         success_del, db_msg_del = db.delete_messages_after_timestamp(st.session_state.current_conversation_id, user_msg_timestamp)
+                                         if success_del:
+                                             st.toast(db_msg_del, icon="✅")
+                                             # 2. Set flag/state to trigger regeneration with the user prompt
+                                             st.session_state.pending_api_call = {
+                                                 "prompt": user_msg_content,
+                                                 "convo_id": st.session_state.current_conversation_id
+                                             }
+                                             logger.info(f"History truncated after user message {user_msg_id}. Set pending API call for regeneration.")
+                                             # 3. Reload state to reflect deletions before the API call happens on next run
+                                             reload_conversation_state(st.session_state.current_conversation_id)
+                                             st.rerun() # Rerun to process the pending call
+                                         else:
+                                             st.error(f"Failed to delete subsequent messages for regenerate: {db_msg_del}")
+                                             logger.error(f"Regenerate failed: DB delete_after failed for timestamp {user_msg_timestamp}: {db_msg_del}")
+
+                            # --- Summarize After Button ---
+                            # Can summarize after any message, even the last one (summarizes nothing)
+                            if st.button("📄", key=f"summ_{msg_id}", help="Summarize history after this message", use_container_width=True):
+                                logger.info(f"User initiated summarize after message ID: {msg_id} (timestamp: {msg_timestamp})")
+                                if not model:
+                                    st.warning("Model not available for summarization.")
+                                else:
+                                    with st.spinner("Fetching messages to summarize..."):
+                                        # Fetch messages strictly after the current one's timestamp
+                                        messages_to_summarize = db.get_messages_after_timestamp(st.session_state.current_conversation_id, msg_timestamp)
+
+                                    if not messages_to_summarize:
+                                        st.toast("No messages found after this one to summarize.", icon="ℹ️")
+                                    else:
+                                        logger.debug(f"Found {len(messages_to_summarize)} messages to summarize.")
+                                        # Format the text block nicely
+                                        text_block = "\n---\n".join([f"**{m['role'].capitalize()}** ({m['timestamp']}):\n{m['content']}" for m in messages_to_summarize])
+
+                                        # TODO: Add context file info more dynamically if possible
+                                        context_info = "Note: Relevant local files were previously included as context."
+
+                                        with st.spinner("Asking Gemini to summarize..."):
+                                            summary, error = logic.summarize_text_for_context(text_block, model, context_info)
+
+                                        if error:
+                                            st.error(f"Summarization failed: {error}")
+                                            logger.error(f"Summarization call failed: {error}")
+                                        elif summary is not None:
+                                            # Display summary nicely
+                                            expander_title = f"Summary of History After Message ({msg_timestamp})"
+                                            with st.expander(expander_title, expanded=True):
+                                                st.markdown(summary)
+                                            logger.info("Summary generated and displayed in expander.")
+                                        else:
+                                            st.error("Summarization returned an unexpected result.")
+                                            logger.error("Summarization returned None summary and None error.")
+
+
+    # --- Chat Input Area ---
+    # Modify chat input based on editing state
+    prompt_placeholder = "Ask a question or type your message..."
+    button_label = "Send" # Default
+    input_key="chat_input_main"
+    current_editing_id = st.session_state.get("editing_message_id")
+
+    if current_editing_id:
+        prompt_placeholder = "Enter edited message and press Enter or click Save..."
+        button_label = "Save Edit"
+        input_key="chat_input_edit" # Use a different key to allow pre-filling value
+        st.warning(f"Editing message ID: {current_editing_id}. Saving will delete subsequent history.", icon="⚠️")
+        prompt_value = st.session_state.editing_message_content
+    else:
+        prompt_value = "" # Default for new message
+
+    # Use columns for input and button
+    input_col, button_col = st.columns([4, 1])
+
+    with input_col:
+        # Use text_area for potentially longer edits, but treat Enter as submit like chat_input
+        # Using chat_input is simpler for Enter handling, but lacks pre-filling. Let's stick with chat_input
+        # and handle the edit logic carefully. We'll use the placeholder to guide the user.
+        prompt = st.chat_input(
+            prompt_placeholder,
+            key=input_key,
+            # value=prompt_value, # chat_input doesn't support default value
+            # We handle the value logic below based on state
+            )
+
+    # Logic to handle the input based on whether we are editing or sending new
+    if prompt: # Input was submitted
+        if current_editing_id:
+            # --- Handle Edit Save ---
+            edited_content = prompt
+            logger.info(f"User submitted edit for message ID: {current_editing_id}")
+
+            # 1. Update the message content in DB
+            success_update, db_msg_update = db.update_message_content(current_editing_id, edited_content)
+
+            if success_update:
+                # 2. Find the timestamp of the edited message (needed for deletion)
+                edited_msg_timestamp = None
+                # Need to fetch the message data again as state might be slightly stale
+                current_msgs_for_edit = db.get_conversation_messages(st.session_state.current_conversation_id, include_ids_timestamps=True)
+                for msg in current_msgs_for_edit:
+                     if msg.get("id") == current_editing_id:
+                         edited_msg_timestamp = msg.get("timestamp")
+                         break
+
+                if edited_msg_timestamp:
+                    # 3. Delete messages AFTER the edited message's timestamp
+                    success_del, db_msg_del = db.delete_messages_after_timestamp(st.session_state.current_conversation_id, edited_msg_timestamp)
+                    if success_del:
+                        st.toast("Edit saved and subsequent history removed.", icon="✅")
+                        logger.info(f"Edit for message {current_editing_id} completed and history truncated after {edited_msg_timestamp}.")
+                    else:
+                        st.error(f"Failed to delete history after edit: {db_msg_del}")
+                        logger.error(f"Edit failed: DB delete_after failed for timestamp {edited_msg_timestamp}: {db_msg_del}")
+                        # History remains, but edit is saved. Inform user?
+                        st.warning("Edit saved, but failed to remove subsequent history.")
+
+                    # 4. Clear editing state and reload/rerun
+                    st.session_state.editing_message_id = None
+                    st.session_state.editing_message_content = ""
+                    reload_conversation_state(st.session_state.current_conversation_id)
+                    st.rerun()
+                else:
+                     st.error("Failed to find timestamp for edited message after update. History not truncated.")
+                     logger.error(f"Edit failed: Could not find timestamp for message ID {current_editing_id} after update.")
+                     # Clear editing state anyway
+                     st.session_state.editing_message_id = None
+                     st.session_state.editing_message_content = ""
+                     reload_conversation_state(st.session_state.current_conversation_id) # Reload to show updated content
+                     st.rerun()
+            else:
+                st.error(f"Failed to save edit: {db_msg_update}")
+                logger.error(f"Edit failed: DB update_message_content failed for ID {current_editing_id}: {db_msg_update}")
+                # Clear editing state
+                st.session_state.editing_message_id = None
+                st.session_state.editing_message_content = ""
+                st.rerun() # Rerun to exit editing mode
+
+        else:
+            # --- Handle Regular Prompt Submission (Save and Set Flag) ---
+            logger.info(f"User prompt received, saving and scheduling API call: '{prompt[:50]}...'")
+            # Prerequisites Check
+            if not st.session_state.current_api_key:
+                st.error("API Key required.")
+                logger.error("Send message halted: API key missing.")
+                st.stop()
+            if not model:
+                 st.error("Model not ready.")
+                 logger.error("Send message halted: Model not ready.")
+                 st.stop() # Add checks for model readiness
+
+            # Conversation ID & Metadata Management
+            active_conversation_id = st.session_state.current_conversation_id
+            is_first_message = not active_conversation_id
+
+            if is_first_message:
+                logger.info("First message in a new conversation.")
+                new_conv_id = db.start_new_conversation()
+                if new_conv_id:
+                    st.session_state.current_conversation_id = new_conv_id
+                    active_conversation_id = new_conv_id
+                    logger.info(f"New conversation created with ID: {active_conversation_id}")
+                    # --- Save Metadata on First Message ---
+                    try:
+                        logger.debug(f"Saving initial metadata for conversation {active_conversation_id}")
+                        new_title = prompt[:TITLE_MAX_LENGTH].strip() or f"Chat {datetime.datetime.now().strftime('%H:%M:%S')}"
+                        current_gen_config = {key: st.session_state[key] for key in DEFAULT_GEN_CONFIG.keys()}
+                        current_instruction = st.session_state.system_instruction
+                        current_paths = st.session_state.added_paths
+                        update_success = db.update_conversation_metadata(
+                            conversation_id=active_conversation_id, title=new_title,
+                            generation_config=current_gen_config, system_instruction=current_instruction,
+                            added_paths=current_paths
+                        )
+                        if update_success:
+                            logger.info(f"Saved initial metadata for conversation {active_conversation_id}")
+                            st.session_state.loaded_conversations = db.get_recent_conversations(limit=15) # Refresh sidebar list
+                        else:
+                            logger.error(f"Failed to save initial metadata for conversation {active_conversation_id}")
+                            st.warning("Failed to save conversation settings.")
+                    except Exception as meta_save_err:
+                        st.error(f"Failed to save conversation metadata: {meta_save_err}")
+                        logger.error(f"Error saving initial metadata for {active_conversation_id}: {meta_save_err}", exc_info=True)
+                else:
+                    st.error("Failed to create a new conversation record.")
+                    logger.critical("Failed to create new conversation record in DB.")
+                    st.stop()
+            else:
+                logger.debug(f"Continuing conversation ID: {active_conversation_id}")
+
+            # Prepare context/instruction for logging with the user message
+            context_content_dict = st.session_state.get('current_context_content_dict', {})
+            context_files_list = list(context_content_dict.keys())
+            context = logic.format_context(context_content_dict, st.session_state.added_paths) if context_content_dict else "No local file context provided."
+            system_instruction = st.session_state.get("system_instruction", "").strip()
+            instruction_prefix = f"--- System Instruction ---\n{system_instruction}\n--- End System Instruction ---\n\n" if system_instruction else ""
+            full_prompt_for_log = instruction_prefix + context + "\n\n---\n\nUser Question:\n" + prompt
+
+            # --- Save User Message to DB ---
+            logger.debug(f"Saving user message to DB for conversation {active_conversation_id}")
+            save_user_success = db.save_message(
+                conversation_id=active_conversation_id, role='user', content=prompt,
+                model_used=st.session_state.selected_model_name,
+                context_files=context_files_list,
+                full_prompt_sent=full_prompt_for_log
+            )
+            if not save_user_success:
+                st.warning("Failed to save user message to the database. Cannot proceed.")
+            else:
+                # --- Set Pending API Call Flag ---
+                st.session_state.pending_api_call = {
+                    "prompt": prompt,
+                    "convo_id": active_conversation_id
+                }
+                logger.info("User message saved. Pending API call flag set. Reloading state and rerunning.")
+                # Reload state first to include the new message ID/Timestamp before the pending call processes it
+                reload_conversation_state(active_conversation_id)
+                st.rerun()
 
 
 # =========================================
@@ -937,25 +1164,21 @@ with col_params:
 
     # Retrieve limits/values from potentially loaded state
     model_max_limit = st.session_state.get('current_model_max_output_tokens', FALLBACK_MODEL_MAX_OUTPUT_TOKENS)
-    # Get current slider value from state, default if not set
     current_max_output_setting = st.session_state.get('max_output_tokens', DEFAULT_MAX_OUTPUT_TOKENS_SLIDER)
 
-    # Clamp value before passing to slider to ensure it's within valid range
+    # Clamp value before passing to slider
     clamped_max_output_setting = max(1, min(current_max_output_setting, model_max_limit))
-    # Update state if clamping changed the value (e.g., model changed)
     if clamped_max_output_setting != current_max_output_setting:
         logger.debug(f"Clamping max_output_tokens from {current_max_output_setting} to {clamped_max_output_setting}")
         st.session_state.max_output_tokens = clamped_max_output_setting
 
-    # Use widgets, values are driven by session_state which is updated on load/change
-    # Ensure keys are present in session state before widgets access them
-    # (Initialization block at the top should handle this)
+    # Use widgets, values driven by session_state
     st.session_state.max_output_tokens = st.slider(
         f"Max Output Tokens (Limit: {model_max_limit:,})",
-        min_value=1, # Min value should be 1
+        min_value=1,
         max_value=model_max_limit,
-        value=st.session_state.max_output_tokens, # Use the potentially clamped value
-        step=max(1, model_max_limit // 256), # Ensure step is at least 1
+        value=st.session_state.max_output_tokens,
+        step=max(1, model_max_limit // 256),
         key="maxoutput_slider",
         help=f"Max tokens per response. Current model limit: {model_max_limit:,}"
     )
@@ -970,7 +1193,7 @@ with col_params:
         key="topp_slider", help="Nucleus sampling probability (consider tokens summing up to this probability). Default: 1.0"
     )
     st.session_state.top_k = st.slider(
-        "Top K:", 1, 100, step=1, # Top K must be at least 1
+        "Top K:", 1, 100, step=1, # Ensure Top K is at least 1
         value=st.session_state.top_k,
         key="topk_slider", help="Consider the top K most likely tokens at each step. Default: 40"
     )

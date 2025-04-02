@@ -151,8 +151,8 @@ def save_instruction(name, text):
         return False, f"DB error saving instruction: {e}"
     finally:
         if conn:
-             logger.debug("Closing DB connection after save_instruction.")
-             conn.close()
+            logger.debug("Closing DB connection after save_instruction.")
+            conn.close()
 
 def load_instruction(name):
     """Loads the text of a named instruction."""
@@ -175,8 +175,8 @@ def load_instruction(name):
         logger.error(f"DB error loading instruction '{name}': {e}", exc_info=True)
     finally:
         if conn:
-             logger.debug("Closing DB connection after load_instruction.")
-             conn.close()
+            logger.debug("Closing DB connection after load_instruction.")
+            conn.close()
     return instruction_text
 
 def get_instruction_names():
@@ -197,8 +197,8 @@ def get_instruction_names():
         logger.error(f"DB error getting instruction names: {e}", exc_info=True)
     finally:
         if conn:
-             logger.debug("Closing DB connection after get_instruction_names.")
-             conn.close()
+            logger.debug("Closing DB connection after get_instruction_names.")
+            conn.close()
     return names
 
 def delete_instruction(name):
@@ -225,8 +225,8 @@ def delete_instruction(name):
         return False, f"DB error deleting instruction: {e}"
     finally:
         if conn:
-             logger.debug("Closing DB connection after delete_instruction.")
-             conn.close()
+            logger.debug("Closing DB connection after delete_instruction.")
+            conn.close()
 
 
 # --- Conversation Functions ---
@@ -243,9 +243,9 @@ def start_new_conversation():
         logger.debug(f"Executing INSERT for new conversation '{conv_id}'.")
         cursor.execute(
             """INSERT INTO conversations
-               (conversation_id, title, start_timestamp, last_update_timestamp,
+            (conversation_id, title, start_timestamp, last_update_timestamp,
                 generation_config_json, system_instruction, added_paths_json)
-               VALUES (?, ?, ?, ?, NULL, NULL, NULL)""",
+            VALUES (?, ?, ?, ?, NULL, NULL, NULL)""",
             (conv_id, PLACEHOLDER_TITLE, now, now)
         )
         conn.commit()
@@ -281,8 +281,8 @@ def update_conversation_metadata(conversation_id, title=None, generation_config=
             params.append(gen_conf_json)
             log_details.append("generation_config")
         except TypeError as json_err:
-             logger.error(f"JSON TypeError encoding generation_config for {conversation_id}: {json_err}", exc_info=True)
-             # Skip this update if encoding fails
+            logger.error(f"JSON TypeError encoding generation_config for {conversation_id}: {json_err}", exc_info=True)
+            # Skip this update if encoding fails
     if system_instruction is not None:
         updates.append("system_instruction = ?")
         params.append(system_instruction)
@@ -342,7 +342,7 @@ def get_conversation_metadata(conversation_id):
         logger.debug(f"Executing SELECT for metadata of conversation {conversation_id}.")
         cursor.execute(
             """SELECT title, generation_config_json, system_instruction, added_paths_json
-               FROM conversations WHERE conversation_id = ?""",
+            FROM conversations WHERE conversation_id = ?""",
             (conversation_id,)
         )
         row = cursor.fetchone()
@@ -364,10 +364,10 @@ def get_conversation_metadata(conversation_id):
                 if row["added_paths_json"]:
                     loaded_list = json.loads(row["added_paths_json"])
                     if isinstance(loaded_list, list):
-                         added_paths = set(loaded_list)
-                         logger.debug(f"Decoded added_paths JSON ({len(added_paths)} items).")
+                        added_paths = set(loaded_list)
+                        logger.debug(f"Decoded added_paths JSON ({len(added_paths)} items).")
                     else:
-                         logger.error(f"Decoded added_paths_json is not a list for {conversation_id}.")
+                        logger.error(f"Decoded added_paths_json is not a list for {conversation_id}.")
             except json.JSONDecodeError as e:
                 logger.error(f"JSONDecodeError for added_paths_json in {conversation_id}: {e}", exc_info=True)
                 # Keep added_paths as empty set
@@ -420,32 +420,240 @@ def get_recent_conversations(limit=15):
             conn.close()
     return conversations
 
-def get_conversation_messages(conversation_id):
-    """Retrieves all messages for a specific conversation."""
-    logger.info(f"Fetching messages for conversation: {conversation_id}")
+def get_conversation_messages(conversation_id, include_ids_timestamps=False):
+    """
+    Retrieves messages for a specific conversation.
+    Optionally includes message_id and timestamp.
+    """
+    logger.info(f"Fetching messages for conversation: {conversation_id} (Include IDs/TS: {include_ids_timestamps})")
     conn = get_db_connection()
     if not conn: return [] # Return empty list on connection failure
 
     messages = []
     try:
         cursor = conn.cursor()
-        logger.debug(f"Executing SELECT for messages of conversation {conversation_id}.")
+        select_fields = "role, content"
+        if include_ids_timestamps:
+            select_fields = "message_id, role, content, timestamp"
+
+        logger.debug(f"Executing SELECT ({select_fields}) for messages of conversation {conversation_id}.")
         cursor.execute(
-            "SELECT role, content, timestamp FROM chat_messages WHERE conversation_id = ? ORDER BY timestamp ASC",
+            f"SELECT {select_fields} FROM chat_messages WHERE conversation_id = ? ORDER BY timestamp ASC",
             (conversation_id,)
         )
         rows = cursor.fetchall()
-        messages = [{"role": row["role"], "content": row["content"]} for row in rows]
+        if include_ids_timestamps:
+            messages = [
+                {
+                    "id": row["message_id"], # Unique DB ID
+                    "role": row["role"],
+                    "content": row["content"],
+                    "timestamp": row["timestamp"] # Store as string or datetime object? Let's keep as string from DB for now.
+                } for row in rows
+            ]
+        else:
+            messages = [{"role": row["role"], "content": row["content"]} for row in rows]
+
         logger.info(f"Retrieved {len(messages)} messages for conversation {conversation_id}.")
     except sqlite3.Error as e:
         logger.error(f"DB error getting conversation messages for {conversation_id}: {e}", exc_info=True)
+        messages = [] # Ensure empty list on error
     finally:
         if conn:
             logger.debug("Closing DB connection after get_conversation_messages.")
             conn.close()
-    # Return messages list (might be empty if none found or error occurred before list population)
-    # If error occurred, empty list is returned, check logs for details.
     return messages
+
+
+def delete_message_by_id(message_id):
+    """Deletes a specific message by its database ID."""
+    logger.warning(f"Attempting to delete message with ID: {message_id}")
+    conn = get_db_connection()
+    if not conn: return False, "Database connection failed."
+
+    try:
+        cursor = conn.cursor()
+        logger.debug(f"Executing DELETE for message ID {message_id}.")
+        cursor.execute("DELETE FROM chat_messages WHERE message_id = ?", (message_id,))
+        conn.commit()
+        if cursor.rowcount > 0:
+            logger.info(f"Message ID {message_id} deleted successfully.")
+            return True, f"Message deleted."
+        else:
+            logger.warning(f"Message ID {message_id} not found for deletion.")
+            return False, "Message not found."
+    except sqlite3.Error as e:
+        logger.error(f"DB error deleting message ID {message_id}: {e}", exc_info=True)
+        conn.rollback()
+        return False, f"DB error deleting message: {e}"
+    finally:
+        if conn:
+            logger.debug("Closing DB connection after delete_message_by_id.")
+            conn.close()
+
+def delete_messages_after_timestamp(conversation_id, timestamp_str):
+    """Deletes all messages in a conversation strictly after a given timestamp string."""
+    logger.warning(f"Attempting to delete messages after {timestamp_str} in conversation {conversation_id}")
+    conn = get_db_connection()
+    if not conn: return False, "Database connection failed."
+
+    try:
+        cursor = conn.cursor()
+        # Ensure timestamp comparison works correctly with the stored format
+        logger.debug(f"Executing DELETE for messages after {timestamp_str} in conv {conversation_id}.")
+        cursor.execute(
+            "DELETE FROM chat_messages WHERE conversation_id = ? AND timestamp > ?",
+            (conversation_id, timestamp_str)
+        )
+        deleted_count = cursor.rowcount
+        conn.commit()
+        logger.info(f"Deleted {deleted_count} messages after {timestamp_str} in conversation {conversation_id}.")
+        return True, f"Deleted {deleted_count} subsequent messages."
+    except sqlite3.Error as e:
+        logger.error(f"DB error deleting messages after {timestamp_str} in conv {conversation_id}: {e}", exc_info=True)
+        conn.rollback()
+        return False, f"DB error deleting subsequent messages: {e}"
+    finally:
+        if conn:
+            logger.debug("Closing DB connection after delete_messages_after_timestamp.")
+            conn.close()
+
+def update_message_content(message_id, new_content):
+    """Updates the content of a specific message."""
+    logger.info(f"Attempting to update content for message ID: {message_id}")
+    conn = get_db_connection()
+    if not conn: return False, "Database connection failed."
+
+    # We should also update the conversation's last_update_timestamp here
+    now = datetime.datetime.now()
+
+    try:
+        cursor = conn.cursor()
+        logger.debug(f"Executing UPDATE for content of message ID {message_id}.")
+        cursor.execute("UPDATE chat_messages SET content = ? WHERE message_id = ?", (new_content, message_id))
+
+        # Get conversation ID to update its timestamp
+        cursor.execute("SELECT conversation_id FROM chat_messages WHERE message_id = ?", (message_id,))
+        row = cursor.fetchone()
+        if row:
+            conversation_id = row['conversation_id']
+            logger.debug(f"Executing UPDATE for conversation {conversation_id} timestamp (triggered by message update).")
+            cursor.execute(
+                "UPDATE conversations SET last_update_timestamp = ? WHERE conversation_id = ?",
+                (now, conversation_id)
+            )
+        else:
+            logger.warning(f"Could not find conversation ID for message {message_id} to update timestamp.")
+
+
+        conn.commit()
+        if cursor.rowcount > 0:
+            logger.info(f"Content updated successfully for message ID {message_id}.")
+            return True, "Message content updated."
+        else:
+            # This case might happen if the update didn't change anything or message_id was wrong
+            logger.warning(f"Message ID {message_id} not found or content unchanged during update.")
+            # Check if message exists
+            cursor.execute("SELECT 1 FROM chat_messages WHERE message_id = ?", (message_id,))
+            if cursor.fetchone():
+                return True, "Message content unchanged." # Still success if no actual change needed
+            else:
+                return False, "Message not found for update."
+
+    except sqlite3.Error as e:
+        logger.error(f"DB error updating content for message ID {message_id}: {e}", exc_info=True)
+        conn.rollback()
+        return False, f"DB error updating message content: {e}"
+    finally:
+        if conn:
+            logger.debug("Closing DB connection after update_message_content.")
+            conn.close()
+def delete_conversation(conversation_id):
+    
+    """Deletes a conversation and all its messages."""
+    logger.warning(f"Attempting to delete conversation and its messages: {conversation_id}")
+    conn = get_db_connection()
+    if not conn: return False, "Database connection failed."
+
+    try:
+        cursor = conn.cursor()
+        # ON DELETE CASCADE on chat_messages table should handle message deletion
+        logger.debug(f"Executing DELETE for conversation ID {conversation_id} from 'conversations' table.")
+        cursor.execute("DELETE FROM conversations WHERE conversation_id = ?", (conversation_id,))
+        conn.commit()
+        # Check if any row was actually deleted
+        if cursor.rowcount > 0:
+            logger.info(f"Conversation {conversation_id} and associated messages deleted successfully.")
+            return True, f"Conversation deleted."
+        else:
+            logger.warning(f"Conversation {conversation_id} not found for deletion.")
+            return False, f"Conversation not found."
+    except sqlite3.Error as e:
+        logger.error(f"DB error deleting conversation {conversation_id}: {e}", exc_info=True)
+        conn.rollback()
+        return False, f"DB error deleting conversation: {e}"
+    finally:
+        if conn:
+            logger.debug("Closing DB connection after delete_conversation.")
+            conn.close()
+
+def get_messages_after_timestamp(conversation_id, timestamp_str):
+    """Retrieves messages (including IDs and timestamps) after a specific timestamp.
+       GUARANTEES returning a list.
+    """
+    logger.info(f"Fetching messages after {timestamp_str} in conversation {conversation_id}")
+    conn = None
+    # GUARANTEE: Initialize as empty list
+    messages = []
+
+    try:
+        conn = get_db_connection()
+        if not conn:
+            logger.error("Cannot get messages after timestamp: Database connection failed.")
+            # GUARANTEE: Return [] if connection fails
+            return [] # Explicit return []
+
+        cursor = conn.cursor()
+        logger.debug(f"Executing SELECT for messages after {timestamp_str} in conv {conversation_id}.")
+        # Ensure the timestamp string comparison is robust in SQLite.
+        # Using YYYY-MM-DD HH:MM:SS.ffffff format generally works well.
+        cursor.execute(
+            "SELECT message_id, role, content, timestamp FROM chat_messages WHERE conversation_id = ? AND timestamp > ? ORDER BY timestamp ASC",
+            (conversation_id, timestamp_str)
+        )
+        rows = cursor.fetchall() # Returns [] if no rows match '>' condition
+
+        # Process rows (this won't run if rows is empty)
+        messages = [
+            {
+                "id": row["message_id"],
+                "role": row["role"],
+                "content": row["content"],
+                "timestamp": str(row["timestamp"])
+            } for row in rows
+        ]
+        logger.info(f"Retrieved {len(messages)} messages after {timestamp_str} for conversation {conversation_id}.")
+        # If rows was empty, messages is correctly [] here.
+
+    except sqlite3.Error as e:
+        logger.error(f"DB error getting messages after {timestamp_str} in conv {conversation_id}: {e}", exc_info=True)
+        # GUARANTEE: Return [] on SQLite error. 'messages' is already [].
+        return []
+    except Exception as e_generic:
+        logger.error(f"Generic error getting messages after {timestamp_str} in conv {conversation_id}: {e_generic}", exc_info=True)
+        # GUARANTEE: Return [] on any other error. 'messages' is already [].
+        return []
+    finally:
+        if conn:
+            try:
+                logger.debug("Closing DB connection after get_messages_after_timestamp.")
+                conn.close()
+            except Exception:
+                pass # Ignore close errors
+
+    # GUARANTEE: Return the list (which is [] if no rows found or error occurred)
+    return messages
+
 
 def update_conversation_timestamp(conversation_id):
     """Explicitly updates the last_update_timestamp for a conversation."""
@@ -488,9 +696,9 @@ def save_message(conversation_id, role, content, model_used=None, context_files=
             context_files_json = json.dumps(context_files)
             logger.debug("Encoded context files list to JSON.")
         except TypeError as json_err:
-             logger.error(f"JSON TypeError encoding context_files for {conversation_id}, message save: {json_err}", exc_info=True)
-             # Decide if save should proceed without context_files_json or fail
-             # context_files_json will remain None
+            logger.error(f"JSON TypeError encoding context_files for {conversation_id}, message save: {json_err}", exc_info=True)
+            # Decide if save should proceed without context_files_json or fail
+            # context_files_json will remain None
 
     success = False
     try:
@@ -498,8 +706,8 @@ def save_message(conversation_id, role, content, model_used=None, context_files=
         logger.debug(f"Executing INSERT for {role} message into chat_messages.")
         cursor.execute(
             """INSERT INTO chat_messages
-               (conversation_id, timestamp, role, content, model_used, context_files_json, full_prompt_sent)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (conversation_id, timestamp, role, content, model_used, context_files_json, full_prompt_sent)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (conversation_id, ts, role, content, model_used, context_files_json, full_prompt_sent)
         )
         logger.debug(f"Executing UPDATE for conversation timestamp (triggered by save_message).")
@@ -515,9 +723,9 @@ def save_message(conversation_id, role, content, model_used=None, context_files=
         conn.rollback()
         # Use toast for user feedback in UI thread if Streamlit context is available
         try:
-             st.toast(f"⚠️ Error saving message to DB: {e}", icon="💾")
+            st.toast(f"⚠️ Error saving message to DB: {e}", icon="💾")
         except Exception as toast_err:
-             logger.warning(f"Could not display DB save error toast: {toast_err}") # Log if toast fails
+            logger.warning(f"Could not display DB save error toast: {toast_err}") # Log if toast fails
     finally:
         if conn:
             logger.debug("Closing DB connection after save_message.")
