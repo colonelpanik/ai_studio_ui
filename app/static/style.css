@@ -1,21 +1,23 @@
 /* app/static/style.css */
+/* Regenerated to remove fixed positioning for chat input */
 
 /* --- General Body/Main --- */
 /* Target the main block container holding chat messages */
-/* Add padding to the bottom to prevent the fixed input bar
-   from overlapping the last message */
-/* Adjust the value based on the actual height of your input bar + some buffer */
+/* REMOVED fixed padding-bottom for fixed input */
+/*
 .main > .block-container {
-    padding-bottom: 150px !important; /* INCREASED PADDING (Adjust as needed) */
+    padding-bottom: 150px !important;
 }
+*/
 
 
-/* --- Anchored Chat Input (Revised) --- */
+/* --- REMOVED Anchored Chat Input --- */
+/*
 div[data-testid="stChatInput"] {
     position: fixed;
     bottom: 0;
-    left: 25%;  /* Problematic */
-    width: 56%; /* Problematic */
+    left: 25%;
+    width: 56%;
     background-color: #1c1e26;
     border-top: 1px solid #31333F;
     padding: 0.75rem 1rem;
@@ -24,69 +26,74 @@ div[data-testid="stChatInput"] {
 }
 */
 
-/* Target the container holding the edit text_area and buttons */
-/* THIS SELECTOR IS A GUESS - INSPECT YOUR HTML TO CONFIRM */
-
+/* REMOVED Anchored Edit Input Container */
+/*
 .main > .block-container > div:has(> div[data-testid="stVerticalBlock"]) > div:has(textarea[data-testid="edit_text_area"]) {
     position: fixed !important;
     bottom: 0 !important;
-    left: 0 !important; /* Problematic */
-    width: 75% !important; /* Problematic */
+    left: 0 !important;
+    width: 75% !important;
     background-color: #0E1117;
     border-top: 1px solid #4a4a4a;
     padding: 1rem;
     z-index: 100 !important;
     box-shadow: 0px -2px 5px rgba(0, 0, 0, 0.2);
 }
+*/
 
-
-/* Remove padding adjustment if fixed positioning is removed */
+/* REMOVED Duplicate padding adjustment */
+/*
 .main > .block-container {
-    padding-bottom: 100px; /* Adjust this value */
+    padding-bottom: 100px;
 }
+*/
 
 
 /* --- Responsive Adjustments (Mobile) --- */
-@media (max-width: 768px) { /* Adjust breakpoint (e.g., 992px for tablets) */
+/* Keep rules for stacking columns, remove fixed position overrides */
+@media (max-width: 768px) { /* Adjust breakpoint if needed */
 
-    /* --- Stack Main Columns --- */
-    /* Target the container holding the two main columns */
-    /* *** IMPORTANT: You MAY need to inspect element in DevTools to find the exact selector *** */
+    /* Keep: Stack Main Columns */
     section[data-testid="stVerticalBlock"] > div.stColumns {
         flex-direction: column !important;
         width: 100% !important;
     }
 
-    /* Target the individual column containers within */
+    /* Keep: Adjust Stacked Column Width */
     section[data-testid="stVerticalBlock"] > div.stColumns > div[data-testid="stVerticalBlock"] {
         width: 100% !important;
         min-width: 100% !important;
         flex: 1 1 100% !important;
-        margin-bottom: 1.5rem; /* Add space between stacked columns */
+        margin-bottom: 1.5rem;
     }
 
-    /* --- Adjust Fixed Chat Input for Mobile --- */
+    /* REMOVED: Fixed Chat Input Adjustments for Mobile */
+    /*
     div[data-testid="stChatInput"] {
         left: 0 !important;
-        width: 100% !important; /* Full width on mobile */
+        width: 100% !important;
     }
+    */
 
-    /* --- Adjust Fixed Edit Input for Mobile --- */
+    /* REMOVED: Fixed Edit Input Adjustments for Mobile */
+    /*
     .main > .block-container > div:has(> div[data-testid="stVerticalBlock"]) > div:has(textarea[data-testid="edit_text_area"]) {
         left: 0 !important;
-        width: 100% !important; /* Full width on mobile */
+        width: 100% !important;
     }
+    */
 
-    /* Optional: Adjust main content padding for mobile if needed */
+    /* REMOVED: Mobile Padding Adjustment related to fixed input */
+    /*
     .main > .block-container {
-       padding-bottom: 180px !important; /* May need more space on mobile */
+       padding-bottom: 180px !important;
     }
+    */
 }
 
 
 /* --- Message Styling (Keep As Is) --- */
 /* Includes .chat-message-block, .message-action-buttons, etc. */
-/* ... (rest of your existing CSS for message bubbles, hover buttons, etc.) ... */
 
 /* Reduce padding/margin around chat messages */
 div[data-testid="stChatMessage"] {
@@ -151,25 +158,23 @@ div[data-testid="stExpander"] > div[role="button"] {
     font-size: 0.9em;
 }
 
-/* Style the edit container to look like chat_input */
+/* Keep styling for the edit input container itself */
 .edit-input-container {
-    border-top: 1px solid #31333F; /* Match chat_input border */
-    padding: 0.75rem 1rem; /* Match chat_input padding */
-    background-color: #0E1117; /* Match background (adjust if needed) */
-    margin-top: 1rem; /* Add some space above */
+    border-top: 1px solid #31333F;
+    padding: 0.75rem 1rem;
+    background-color: #0E1117;
+    margin-top: 1rem;
 }
 
-/* Style the text area itself */
+/* Keep styling for the text area within the edit container */
 .edit-input-container textarea[data-testid="stTextArea"] {
-    /* Add styles to make textarea look like the input field */
-    /* Inspect st.chat_input's input element for specific border, bg, etc. */
-    border: 1px solid #4a4a4a; /* Example */
-    background-color: #1c1e26; /* Example */
-    min-height: 80px; /* Example */
-    /* Add more specific font, padding, border-radius styles */
+    border: 1px solid #4a4a4a;
+    background-color: #1c1e26;
+    min-height: 80px;
+    /* Add more specific font, padding, border-radius styles if desired */
 }
 
-/* Style buttons within the edit container */
+/* Keep styling for buttons within the edit container */
 .edit-input-container div[data-testid="stButton"] > button {
     margin-top: 0.5rem;
 }
