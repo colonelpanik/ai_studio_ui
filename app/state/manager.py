@@ -4,6 +4,9 @@ import streamlit as st
 import logging
 from app.data import database as db
 from app.logic import api_client
+# Import types needed for grounding config in api_client, but not used directly here
+# import google.ai.generativelanguage as glm
+# import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +15,9 @@ MAX_HISTORY_PAIRS = 15
 DEFAULT_GEN_CONFIG = {
     "temperature": 0.7, "top_p": 1.0, "top_k": 40,
     "max_output_tokens": 4096, # Initial default, will be clamped by model limit
-    "stop_sequences_str": "", "json_mode": False
+    "stop_sequences_str": "", "json_mode": False,
+    "enable_grounding": False,
+    "grounding_threshold": 0.0 # <-- ADDED: Default for dynamic threshold (0.0 = off/always try)
 }
 
 # --- Initialization ---
@@ -55,7 +60,7 @@ def initialize_session_state():
     }
 
     # Apply generation parameter defaults
-    defaults.update(DEFAULT_GEN_CONFIG)
+    defaults.update(DEFAULT_GEN_CONFIG) # Now includes grounding_threshold
 
     # Initialize missing keys
     for key, value in defaults.items():
@@ -85,9 +90,7 @@ def reload_conversation_state(conversation_id: str | None):
     logger.info(f"Reloading state for conversation ID: {conversation_id}")
     from app.logic.context_manager import reconstruct_gemini_history
 
-    # ****** ADD LOGGING HERE ******
     logger.info(f"Checking conversation_id INSIDE reload: '{conversation_id}' (Type: {type(conversation_id)})")
-    # *****************************
 
     if not conversation_id:
         st.session_state.messages = []
@@ -96,14 +99,10 @@ def reload_conversation_state(conversation_id: str | None):
         return
 
     loaded_messages = db.get_conversation_messages(conversation_id, include_ids_timestamps=True)
-
-    # ****** ADD LOGGING HERE ******
     logger.info(f"Loaded {len(loaded_messages)} messages from DB BEFORE assigning to state.")
-    # *****************************
-
     st.session_state.messages = loaded_messages
 
-    # Reconstruct history for the API (pass only role/content)
+    # Reconstruct history for the API
     api_history_input = [{"role": m["role"], "content": m["content"]} for m in loaded_messages]
     reconstructed_history = reconstruct_gemini_history(api_history_input)
 
@@ -132,11 +131,10 @@ def reset_chat_state_to_defaults():
     st.session_state.summary_result = None # Clear summary
     st.session_state.clear_summary = False
     # Reset generation parameters from defaults
-    for key, value in DEFAULT_GEN_CONFIG.items():
+    for key, value in DEFAULT_GEN_CONFIG.items(): # Now includes grounding_threshold
         st.session_state[key] = value
     # Clamp max_output_tokens again after reset, based on current model limit
     clamp_max_tokens()
-    # Note: Context details and token count will be recalculated separately
 
 
 def clamp_max_tokens():
@@ -149,12 +147,9 @@ def clamp_max_tokens():
         logger.debug(f"Clamping max_output_tokens from {current_value} to {clamped_value} (limit: {limit})")
         st.session_state.max_output_tokens = clamped_value
 
-# --- Accessors (Optional - direct access is also fine) ---
+# --- Accessors ---
 def get_current_messages():
     return st.session_state.get("messages", [])
 
 def get_current_conversation_id():
     return st.session_state.get("current_conversation_id")
-
-# Add more accessors if needed for clarity elsewhere
-
