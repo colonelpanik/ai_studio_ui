@@ -47,8 +47,8 @@ def list_available_models() -> list[str]:
             # Check for generateContent support explicitly
             if 'generateContent' in m.supported_generation_methods:
                  # Prioritize models likely supporting tools (heuristic)
-                 if m.name.startswith('models/gemini-1.5') or m.name.startswith('models/gemini-pro'):
-                     model_list.append(m.name)
+                 #if m.name.startswith('models/gemini-1.5') or m.name.startswith('models/gemini-pro'):
+                model_list.append(m.name)
                  # Include others just in case, but maybe list them later?
                  # elif not m.name.startswith('models/embedding'): # Avoid embedding models
                  #    model_list.append(m.name) # Keep other content models
