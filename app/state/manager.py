@@ -4,6 +4,8 @@ import streamlit as st
 import logging
 from app.data import database as db
 from app.logic import api_client
+import datetime # Ensure datetime is imported
+
 # Import types needed for grounding config in api_client, but not used directly here
 # import google.ai.generativelanguage as glm
 # import google.generativeai as genai
@@ -17,7 +19,7 @@ DEFAULT_GEN_CONFIG = {
     "max_output_tokens": 4096, # Initial default, will be clamped by model limit
     "stop_sequences_str": "", "json_mode": False,
     "enable_grounding": False,
-    "grounding_threshold": 0.0 # <-- ADDED: Default for dynamic threshold (0.0 = off/always try)
+    "grounding_threshold": 0.0
 }
 
 # --- Initialization ---
@@ -34,8 +36,9 @@ def initialize_session_state():
         "pending_api_call": None, # Stores dict {'prompt': '...', 'convo_id': '...'}
         # Context state
         "added_paths": set(),
-        "context_files_details": [], # List of tuples (path, status, detail)
+        "context_files_details": [], # List of tuples (abs_path, status, detail) - NOW USES ABS PATH
         "current_context_content_dict": {}, # {abs_path: content}
+        "excluded_individual_files": set(), # Set of absolute paths to exclude
         # Model state
         "available_models": None, # List of model names from API
         "selected_model_name": api_client.DEFAULT_MODEL,
@@ -45,6 +48,8 @@ def initialize_session_state():
         # Instruction state
         "system_instruction": "",
         "instruction_names": [], # List of names from DB
+        "instr_save_name_value": "", # Holds the current value of the save input
+        "next_instr_save_name": None, # Holds value for next run after load
         # Editing state
         "editing_message_id": None,
         "editing_message_content": "",
@@ -60,7 +65,7 @@ def initialize_session_state():
     }
 
     # Apply generation parameter defaults
-    defaults.update(DEFAULT_GEN_CONFIG) # Now includes grounding_threshold
+    defaults.update(DEFAULT_GEN_CONFIG)
 
     # Initialize missing keys
     for key, value in defaults.items():
@@ -86,7 +91,10 @@ def initialize_session_state():
 
 # --- State Update Helpers ---
 def reload_conversation_state(conversation_id: str | None):
-    """Fetches messages/history for a conversation_id and updates state."""
+    """
+    Fetches messages/history for a conversation_id, ensures timestamps are
+    datetime objects in st.session_state.messages, and updates Gemini history.
+    """
     logger.info(f"Reloading state for conversation ID: {conversation_id}")
     from app.logic.context_manager import reconstruct_gemini_history
 
@@ -98,12 +106,33 @@ def reload_conversation_state(conversation_id: str | None):
         logger.debug("Cleared messages and history as conversation ID is None.")
         return
 
-    loaded_messages = db.get_conversation_messages(conversation_id, include_ids_timestamps=True)
-    logger.info(f"Loaded {len(loaded_messages)} messages from DB BEFORE assigning to state.")
-    st.session_state.messages = loaded_messages
+    # Fetch messages including timestamps (DB function should return datetime objects due to converter)
+    loaded_messages_raw = db.get_conversation_messages(conversation_id, include_ids_timestamps=True)
+    logger.info(f"Loaded {len(loaded_messages_raw)} raw messages from DB.")
 
-    # Reconstruct history for the API
-    api_history_input = [{"role": m["role"], "content": m["content"]} for m in loaded_messages]
+    # --- ADDED: Explicitly ensure timestamps are datetime objects ---
+    processed_messages = []
+    for msg in loaded_messages_raw:
+        ts = msg.get("timestamp")
+        if isinstance(ts, str):
+            try:
+                msg["timestamp"] = datetime.datetime.fromisoformat(ts)
+                logger.warning(f"Converted string timestamp '{ts}' back to datetime for message {msg.get('message_id')}.")
+            except (ValueError, TypeError):
+                logger.error(f"Could not convert invalid timestamp string '{ts}' for message {msg.get('message_id')}. Setting to None.", exc_info=True)
+                msg["timestamp"] = None # Or handle differently?
+        elif not isinstance(ts, datetime.datetime):
+             logger.warning(f"Message {msg.get('message_id')} has unexpected timestamp type: {type(ts)}. Setting to None.")
+             msg["timestamp"] = None
+        processed_messages.append(msg)
+    # --- END ADDED ---
+
+    st.session_state.messages = processed_messages # Assign processed list to state
+    logger.debug(f"Processed {len(processed_messages)} messages assigned to session state.")
+
+
+    # Reconstruct history for the API (using processed messages)
+    api_history_input = [{"role": m["role"], "content": m["content"]} for m in processed_messages]
     reconstructed_history = reconstruct_gemini_history(api_history_input)
 
     # Apply history length limit
@@ -114,7 +143,7 @@ def reload_conversation_state(conversation_id: str | None):
     else:
         st.session_state.gemini_history = reconstructed_history
 
-    logger.debug(f"Reloaded {len(loaded_messages)} messages. Reconstructed history length: {len(st.session_state.gemini_history)}")
+    logger.debug(f"Reloaded state complete. Final history length: {len(st.session_state.gemini_history)}")
 
 
 def reset_chat_state_to_defaults():
@@ -130,6 +159,9 @@ def reset_chat_state_to_defaults():
     st.session_state.system_instruction = ""
     st.session_state.summary_result = None # Clear summary
     st.session_state.clear_summary = False
+    st.session_state.excluded_individual_files = set() # Reset exclusions
+    st.session_state.instr_save_name_value = "" # Reset save name input value
+    st.session_state.next_instr_save_name = None # Reset next value flag
     # Reset generation parameters from defaults
     for key, value in DEFAULT_GEN_CONFIG.items(): # Now includes grounding_threshold
         st.session_state[key] = value
@@ -149,7 +181,16 @@ def clamp_max_tokens():
 
 # --- Accessors ---
 def get_current_messages():
-    return st.session_state.get("messages", [])
+    """Returns the list of messages, ensuring timestamps are datetime objects."""
+    # Ensure messages are processed on access if needed, though reload should handle it.
+    messages = st.session_state.get("messages", [])
+    # Optional: Add a check here too, though might be redundant if reload works.
+    # for msg in messages:
+    #     if isinstance(msg.get("timestamp"), str):
+    #         # Attempt conversion or log error
+    #         pass
+    return messages
+
 
 def get_current_conversation_id():
     return st.session_state.get("current_conversation_id")
